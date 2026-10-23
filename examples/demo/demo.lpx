@@ -1,0 +1,29 @@
+#!name=Loon-Sim Demo
+#!desc=模拟器示例插件 — 演示 [Argument]/[Rule]/[Mitm]/[Script]/[Rewrite] 五种段位与开关用法
+#!system=iOS, iPadOS
+#!date=2026-10-23 12:00:00
+#!author=Savues
+
+[Argument]
+blockAds = switch, true, false, tag=拦截广告, desc=关闭后 Script 规则不执行、[Rule] 也不再拦截
+addTag = switch, false, false, tag=响应打标, desc=在响应体里加一个标记字段（演示第二个参数）
+
+[Rule]
+# 域名级拦截 —— 注意：该段没有 enable 字段，写了也是死开关（规则会无条件生效）
+DOMAIN-SUFFIX, ads.example.com, REJECT
+DOMAIN, tracker.example.net, REJECT
+
+[MITM]
+hostname = api.example.com, ads.example.com
+
+[Script]
+# 响应脚本（新语法）：命中后由脚本决定是否修改 body
+response if ${url} ~= /^https:\/\/api\.example\.com\/feed/i then script("demo.response.js", {${blockAds}, ${addTag}}) with enable=${blockAds}, requires_body=true, tag="清理 feed 广告"
+# 请求脚本（新语法）
+request if ${url} ~= /^https:\/\/api\.example\.com\/upload/i then script("demo.request.js") with tag="改写上传"
+
+[Rewrite]
+# 请求侧无条件拦截
+request if ${url} ~= /^https:\/\/beacon\.example\.com\//i then reject_dict(200)
+# 请求侧条件式开关（官方支持写法）
+request if ${url} ~= /^https:\/\/track\.example\.com\//i && ${blockAds} == true then reject_dict(200)

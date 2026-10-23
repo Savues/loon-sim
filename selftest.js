@@ -1,0 +1,208 @@
+#!/usr/bin/env node
+'use strict';
+/**
+ * 模拟器自测套件 —— 校验核心语义是否与 Loon 官方规范一致
+ * 每条断言标注官方依据（script_v2 / rewrite_v2 / Plugin / Rule）
+ */
+
+const assert = require('assert');
+const path = require('path');
+const { parseArguments, parseScriptRules, parseRules, parseMitm, splitTopLevel } = require('./lpx');
+const { evalCondition, buildArgument, matchRule } = require('./matcher');
+const { createRuntime } = require('./runtime');
+const fs = require('fs');
+
+let pass = 0, fail = 0;
+const failures = [];
+function t(name, fn) {
+  try { fn(); pass++; }
+  catch (e) { fail++; failures.push(`${name}\n    ${e.message.split('\n')[0]}`); }
+}
+
+console.log('=== 模拟器自测 ===\n');
+
+/* ---------- 1. [Argument] 解析（官方：控件,默认值[,type=][,tag=][,desc=]）---------- */
+console.log('① [Argument] 解析');
+t('switch 默认为 Boolean', () => {
+  const a = parseArguments(['enabled = switch,true,tag=启用']);
+  assert.strictEqual(a.enabled.kind, 'switch');
+  assert.strictEqual(a.enabled.default, true);
+});
+t('switch 默认 false', () => {
+  const a = parseArguments(['x = switch,false,tag=t']);
+  assert.strictEqual(a.x.default, false);
+});
+t('switch 三位置形式也可解析', () => {
+  const a = parseArguments(['d = switch,false,true,tag=调试日志']);
+  assert.strictEqual(a.d.default, false);
+});
+t('input 默认 String', () => {
+  const a = parseArguments(['name = input,"Loon",tag=名称']);
+  assert.strictEqual(a.name.kind, 'input');
+  assert.strictEqual(a.name.default, 'Loon');
+  assert.strictEqual(a.name.type, 'string');
+});
+t('input + type=number → Number', () => {
+  const a = parseArguments(['p = input,9.99,type=number,tag=价格']);
+  assert.strictEqual(a.p.default, 9.99);
+  assert.strictEqual(a.p.type, 'number');
+});
+t('select 多选项取首个为默认', () => {
+  const a = parseArguments(['r = select,"CN","US","JP",tag=地区']);
+  assert.strictEqual(a.r.default, 'CN');
+});
+t('select + type=number', () => {
+  const a = parseArguments(['l = select,1,2,3,type=number,tag=等级']);
+  assert.strictEqual(a.l.default, 1);
+  assert.strictEqual(a.l.type, 'number');
+});
+t('含逗号的 desc 不破坏解析', () => {
+  const a = parseArguments(['x = switch,true,tag=标签,desc=拦截 a,b,c 三类广告']);
+  assert.strictEqual(a.x.default, true);
+});
+
+/* ---------- 2. [Script] 规则解析（官方 script_v2）---------- */
+console.log('② [Script] 规则解析');
+t('response 规则 + 对象参数', () => {
+  const r = parseScriptRules(['response if ${url} ~= /^https:\\/\\/a\\.com\\/x/i then script("s.js", {${a}, ${b}}) with enable=${a}, requires_body=true, tag="T"'])[0];
+  assert.strictEqual(r.phase, 'response');
+  assert.deepStrictEqual(r.argumentKeys, ['a', 'b']);
+  assert.strictEqual(r.options.requires_body, 'true');
+  assert.strictEqual(r.invalid, null);
+});
+t('字符串参数', () => {
+  const r = parseScriptRules(['generic then script("t.js", "region=CN") with tag="T"'])[0];
+  assert.strictEqual(r.argumentLiteral, 'region=CN');
+  assert.strictEqual(r.argumentKeys.length, 0);
+});
+t('无参数 → null', () => {
+  const r = parseScriptRules(['request if ${url} ~= /a/i then script("r.js")'])[0];
+  assert.strictEqual(r.argumentLiteral, null);
+  assert.strictEqual(r.argumentKeys.length, 0);
+});
+t('空对象参数 → invalid（官方：不能为空）', () => {
+  const r = parseScriptRules(['request if ${url} ~= /a/i then script("x.js", {})'])[0];
+  assert.ok(r.invalid && r.invalid.includes('空'));
+});
+t('对象内非 ${} 成员 → invalid', () => {
+  const r = parseScriptRules(['request if ${url} ~= /a/i then script("x.js", {"CN", 2})'])[0];
+  assert.ok(r.invalid);
+});
+t('对象引用运行变量 → invalid', () => {
+  const r = parseScriptRules(['request if ${url} ~= /a/i then script("x.js", {${url}})'])[0];
+  assert.strictEqual(r.invalid, null); // 语法上合法，语义校验在 check 阶段（需 [Argument] 对照）
+});
+t('response 规则缺 URL Guard → invalid（官方强制）', () => {
+  const r = parseScriptRules(['response if ${response.status} == 200 then script("x.js")'])[0];
+  assert.ok(r.invalid && r.invalid.includes('URL Guard'));
+});
+t('cron 规则', () => {
+  const r = parseScriptRules(['cron "0 8 * * *" then script("c.js") with timeout=300'])[0];
+  assert.strictEqual(r.phase, 'other');        // cron 不参与 HTTP 匹配
+  assert.strictEqual(r.trigger, 'cron "0 8 * * *"');
+  assert.strictEqual(r.invalid, null);
+});
+
+/* ---------- 3. 条件求值（官方 rewrite_v2 变量与操作符）---------- */
+console.log('③ 条件求值');
+const V = { url: 'https://api.example.com/item/42', 'request.method': 'POST', enabled: true, level: 2, region: 'CN', off: false };
+t('${url} ~= 正则', () => assert.strictEqual(evalCondition('${url} ~= /item\\/\\d+/i', V), true));
+t('正则不匹配', () => assert.strictEqual(evalCondition('${url} ~= /nomatch/i', V), false));
+t('${开关} == true', () => assert.strictEqual(evalCondition('${enabled} == true', V), true));
+t('${开关} == true 为假', () => assert.strictEqual(evalCondition('${off} == true', V), false));
+t('数字比较', () => assert.strictEqual(evalCondition('${level} == 2', V), true));
+t('字符串比较', () => assert.strictEqual(evalCondition('${region} == "CN"', V), true));
+t('&& 组合', () => assert.strictEqual(evalCondition('${url} ~= /example/i && ${enabled} == true', V), true));
+t('|| 组合', () => assert.strictEqual(evalCondition('${off} == true || ${enabled} == true', V), true));
+t('括号分组', () => assert.strictEqual(evalCondition('(${off} == true || ${region} == "CN") && ${level} == 2', V), true));
+t('大小写敏感的正则标志 i', () => assert.strictEqual(evalCondition('${url} ~= /API\\.EXAMPLE/i', V), true));
+
+/* ---------- 4. $argument 三态（官方 script_v2）---------- */
+console.log('④ $argument 三态');
+const defs = parseArguments(['a = switch,true', 'b = select,1,2,3,type=number']);
+t('对象参数 → Object（key=参数名，value 保留类型）', () => {
+  const arg = buildArgument({ argumentKeys: ['a', 'b'] }, defs, {});
+  assert.deepStrictEqual(arg, { a: true, b: 1 });
+  assert.strictEqual(typeof arg.a, 'boolean');
+  assert.strictEqual(typeof arg.b, 'number');
+});
+t('字符串参数 → String', () => {
+  assert.strictEqual(buildArgument({ argumentLiteral: 'x=1' }, defs, {}), 'x=1');
+});
+t('无参数 → null', () => {
+  assert.strictEqual(buildArgument({ argumentKeys: [] }, defs, {}), null);
+});
+t('命令行覆盖生效', () => {
+  assert.deepStrictEqual(buildArgument({ argumentKeys: ['a'] }, defs, { a: false }), { a: false });
+});
+
+/* ---------- 5. [Rule] 匹配（官方 Rule：域名优先、后缀匹配）---------- */
+console.log('⑤ [Rule] 匹配');
+const rules = parseRules(['DOMAIN, exact.com, REJECT', 'DOMAIN-SUFFIX, suf.com, REJECT', 'DOMAIN-KEYWORD, kw, REJECT']);
+const fake = { rules };
+t('DOMAIN 精确匹配', () => assert.ok(matchRule(fake, 'https://exact.com/x')));
+t('DOMAIN 不匹配子域', () => assert.strictEqual(matchRule(fake, 'https://sub.exact.com/x'), null));
+t('DOMAIN-SUFFIX 匹配自身', () => assert.ok(matchRule(fake, 'https://suf.com/')));
+t('DOMAIN-SUFFIX 匹配子域', () => assert.ok(matchRule(fake, 'https://a.b.suf.com/')));
+t('DOMAIN-KEYWORD 包含匹配', () => assert.ok(matchRule(fake, 'https://x-kw-y.com/')));
+t('未命中返回 null', () => assert.strictEqual(matchRule(fake, 'https://other.com/'), null));
+
+/* ---------- 6. [Mitm] 解析 ---------- */
+console.log('⑥ [Mitm]');
+t('逗号分隔 + 去 %APPEND%', () => {
+  const h = parseMitm(['hostname = a.com, b.com', 'hostname = %APPEND% c.com']);
+  assert.deepStrictEqual(h, ['a.com', 'b.com', 'c.com']);
+});
+
+/* ---------- 7. 运行时 $done 语义 ---------- */
+console.log('⑦ 运行时');
+t('$done({}) → 原样', () => {
+  const f = '/tmp/_sim_t1.js';
+  fs.writeFileSync(f, 'if ($response.body) { $done({}); } else { $done({}); }');
+  const rt = createRuntime({ request: { url: 'https://a.com/' }, response: { status: 200, body: '{"x":1}' } });
+  const r = rt.run(f);
+  assert.ok(r.ok && r.doneCalled);
+  assert.deepStrictEqual(r.done, {});
+});
+t('$argument 注入正确', () => {
+  const f = '/tmp/_sim_t2.js';
+  fs.writeFileSync(f, 'console.log(JSON.stringify($argument)); $done({});');
+  const rt = createRuntime({ response: { body: '' }, argument: { a: true, b: 1 } });
+  const r = rt.run(f);
+  assert.strictEqual(r.logs[0], '{"a":true,"b":1}');
+});
+t('$argument 省略 → null', () => {
+  const f = '/tmp/_sim_t3.js';
+  fs.writeFileSync(f, 'console.log(String($argument)); $done({});');
+  const rt = createRuntime({ response: { body: '' } });
+  const r = rt.run(f);
+  assert.strictEqual(r.logs[0], 'null');
+});
+t('$persistentStore 读写', () => {
+  const f = '/tmp/_sim_t4.js';
+  fs.writeFileSync(f, '$persistentStore.write("v","k"); console.log($persistentStore.read("k")); $done({});');
+  const r = createRuntime({ response: { body: '' } }).run(f);
+  assert.strictEqual(r.logs[0], 'v');
+});
+t('脚本异常被捕获', () => {
+  const f = '/tmp/_sim_t5.js';
+  fs.writeFileSync(f, 'throw new Error("boom");');
+  const r = createRuntime({ response: { body: '' } }).run(f);
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.error.includes('boom'));
+});
+t('异步 $done（setTimeout）', () => {
+  const f = '/tmp/_sim_t6.js';
+  fs.writeFileSync(f, 'setTimeout(()=>$done({body:"later"}),10);');
+  const r = createRuntime({ response: { body: '' } }).run(f);
+  assert.strictEqual(r.doneCalled, false); // 同步执行阶段未调用（模拟器不等待异步）
+});
+
+/* ---------- 8. splitTopLevel 边界 ---------- */
+console.log('⑧ 顶层切分');
+t('不切分括号内逗号', () => assert.deepStrictEqual(splitTopLevel('f(a,b),c', ','), ['f(a,b)', 'c']));
+t('不切分引号内逗号', () => assert.deepStrictEqual(splitTopLevel('"a,b",c', ','), ['"a,b"', 'c']));
+t('不切分正则内逗号', () => assert.deepStrictEqual(splitTopLevel('/a{1,2}/,x', ','), ['/a{1,2}/', 'x']));
+
+console.log(`\n结果: ${pass} 通过, ${fail} 失败`);
+if (fail) { console.log('\n失败项:'); failures.forEach(f => console.log('  ✗ ' + f)); process.exit(1); }

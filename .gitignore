@@ -1,0 +1,4 @@
+node_modules/
+.loon-sim-store.json
+*.log
+.DS_Store

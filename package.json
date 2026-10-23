@@ -1,0 +1,15 @@
+{
+  "name": "loon-sim",
+  "version": "1.0.0",
+  "description": "Loon 插件本地模拟器 — 离线运行插件规则与脚本, 给出逐条决策反馈",
+  "keywords": ["loon", "proxy", "plugin", "simulator", "adblock"],
+  "license": "MIT",
+  "main": "cli.js",
+  "bin": { "loon-sim": "cli.js" },
+  "scripts": {
+    "test": "node selftest.js",
+    "check": "node cli.js check"
+  },
+  "engines": { "node": ">=14" },
+  "files": ["*.js", "README.md"]
+}
