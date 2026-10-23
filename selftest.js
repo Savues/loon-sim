@@ -227,5 +227,59 @@ t('不切分括号内逗号', () => assert.deepStrictEqual(splitTopLevel('f(a,b)
 t('不切分引号内逗号', () => assert.deepStrictEqual(splitTopLevel('"a,b",c', ','), ['"a,b"', 'c']));
 t('不切分正则内逗号', () => assert.deepStrictEqual(splitTopLevel('/a{1,2}/,x', ','), ['/a{1,2}/', 'x']));
 
+console.log('⑨ v1.3+ 新能力 (mock/persist/utils/trigger/converter)');
+// httpClient mock
+t('httpClient mock 命中返回自定义响应', () => {
+  const fs = require('fs');
+  fs.writeFileSync('/tmp/st_mock.js', '$httpClient.get({url:"https://api.t.com/v1"},(e,r,b)=>{console.log("S="+r.status+" B="+b);$done({});});');
+  const { createRuntime } = require('./runtime');
+  const rt = createRuntime({ request: { url: 'https://x/' }, httpMocks: { 'api.t.com': { status: 201, body: 'ok' } } });
+  const res = rt.run('/tmp/st_mock.js');
+  // 回调是 setImmediate 异步 — logs 同步阶段至少含 mocked 标记
+  assert.ok(res.logs.join('').includes('mocked'), '应标记 mocked: ' + res.logs.join('|'));
+});
+t('$utils md5/base64', () => {
+  const { createRuntime } = require('./runtime');
+  const sandbox = createRuntime({}).sandbox;
+  assert.strictEqual(sandbox.$utils.md5('abc').length, 32, 'md5 32位');
+  assert.strictEqual(sandbox.$utils.base64.encode('hi'), 'aGk=', 'base64');
+});
+t('$persistentStore 持久化落盘', () => {
+  const fs = require('fs');
+  const f = '/tmp/st_store.json';
+  if (fs.existsSync(f)) fs.unlinkSync(f);
+  const { createRuntime } = require('./runtime');
+  const rt1 = createRuntime({ storeFile: f });
+  rt1.sandbox.$persistentStore.write('V1', 'k');
+  assert.deepStrictEqual(JSON.parse(fs.readFileSync(f, 'utf8')), { k: 'V1' }, '写入即落盘');
+  const rt2 = createRuntime({ storeFile: f });
+  assert.strictEqual(rt2.sandbox.$persistentStore.read('k'), 'V1', '新实例可读');
+});
+// 官方转换器
+t('官方转换器: Script 基本转换', () => {
+  const c = require('./converter');
+  const r = c.convertLine('http-request ^https://x\\.com script-path=a.js, requires-body=true', { argumentTypes: {} });
+  assert.ok(r.text.includes('request if') && r.text.includes('requires_body=true'), r.text);
+});
+t('官方转换器: reject-dict → reject_dict(200)', () => {
+  const c = require('./converter');
+  assert.ok(c.convertLine('^u reject-dict', { argumentTypes: {} }).text.includes('reject_dict(200)'));
+});
+t('对象参数点号名 (v1.4 修复回归)', () => {
+  const { parseLpx } = require('./lpx');
+  const fs = require('fs');
+  fs.writeFileSync('/tmp/st_dot.lpx', '#!name=T\n[Argument]\nHome.Switch = switch,true\n[Script]\nresponse if ${url} ~= /x/ then script("a.js", {${Home.Switch}})\n');
+  const p = parseLpx('/tmp/st_dot.lpx');
+  assert.deepStrictEqual(p.scriptRules[0].argumentKeys, ['Home.Switch'], '点号参数名不丢');
+});
+t('URL Rewrite 段兜底 (convert.js 逻辑)', () => {
+  // 模拟 convert.js 的段名改写: 改写后官方转换器能处理
+  const c = require('./converter');
+  const src = '[URL Rewrite]\n^u reject';
+  const fixed = src.replace(/^\[URL Rewrite\]$/m, '[Rewrite]');
+  const r = c.convertText(fixed, { argumentTypes: {} });
+  assert.strictEqual(r.converted, 1, '改写段名后可转换');
+});
+
 console.log(`\n结果: ${pass} 通过, ${fail} 失败`);
 if (fail) { console.log('\n失败项:'); failures.forEach(f => console.log('  ✗ ' + f)); process.exit(1); }

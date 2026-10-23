@@ -207,12 +207,42 @@ function cmdCheck() {
     }
   }
 
-  // [Rule] 策略合法性
-  const VALID_POLICY = /^(REJECT|DIRECT|PROXY|REJECT-DROP|REJECT-NO-DROP)$/i;
+  // [Rule] 策略合法性 — 官方 plugin.md: 插件规则只能 DIRECT / REJECT 系 / PROXY
+  // (PROXY=用户选择策略组; 不能引用任意策略组名; 未指定策略默认 DIRECT)
+  const VALID_POLICY = /^(DIRECT|PROXY|REJECT|REJECT-DROP|REJECT-NO-DROP|REJECT-DICT|REJECT-ARRAY|REJECT-IMG|REJECT-VIDEO|REJECT-NO-DROP)$/i;
   for (const r of p.rules) {
-    if (r.policy && !VALID_POLICY.test(r.policy) && !(r.policy in (p.args || {}))) {
-      console.log(`⚠️ [Rule] 策略 "${r.policy}" 不是内置策略，也不是本插件参数（若为订阅策略组名请忽略）: ${r.raw?.slice(0, 60) || ''}`);
-      warns++;
+    if (r.policy && !VALID_POLICY.test(r.policy)) {
+      console.log(`❌ [Rule] 策略 "${r.policy}" 超出插件可用范围（官方: 仅 DIRECT/PROXY/REJECT 系）: ${r.raw?.slice(0, 60) || ''}`);
+      errs++;
+    } else if (!r.policy) {
+      console.log(`ℹ️ [Rule] 未指定策略 → 默认 DIRECT: ${r.raw?.slice(0, 60) || ''}`);
+    }
+  }
+
+  // Rewrite as 捕获越界 (官方: 捕获下标不能超过正则中的捕获组数量; 审计问题5)
+  for (const r of p.rewriteRules) {
+    const cond = String(r.condition || r.raw || '');
+    const asM = /~=\s+\/((?:[^\/]\\.|[^\/])+)\/\w*\s+as\s+(\w+)/.exec(cond.replace(/\\\//g, '/'));
+    if (!asM) continue;
+    const [pat, name] = [asM[1], asM[2]];
+    // 统计捕获组数 (排除 (?: 和 \\()
+    const groups = (pat.replace(/\\\(/g, '').match(/((?!\?)[(])/g) || []).length;
+    for (const m of String(r.raw || r.action || '').matchAll(new RegExp('\\$\\{' + name + '\\.(\\d+)\\}', 'g'))) {
+      if (Number(m[1]) > groups) {
+        console.log(`❌ [Rewrite] 捕获引用 \${${name}.${m[1]}} 越界（正则仅 ${groups} 个捕获组）: ${String(r.raw || '').slice(0, 70)}`);
+        errs++;
+      }
+    }
+  }
+
+  // enable=${未声明参数} (官方: 参数未声明→当前 Script 无效; 审计问题4 官方转换器放行)
+  for (const r of p.scriptRules) {
+    if (r.legacy) continue; // 旧语法单独处理
+    for (const m of String(r.raw || '').matchAll(/enable=\$\{([\w.-]+)\}/g)) {
+      if (!(m[1] in (p.args || {}))) {
+        console.log(`❌ [Script] with enable=\${${m[1]}} 引用未声明参数（官方: 当前 Script 无效）`);
+        errs++;
+      }
     }
   }
 

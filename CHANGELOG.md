@@ -3,6 +3,21 @@
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ---
+## [1.4.1] - 2026-10-24
+
+### P0 收口：官方转换器审计问题的自动化兜底
+
+- **`convert` 命令升级为完整迁移流水线**：① 检测 `[URL Rewrite]` 段并改写为 `[Rewrite]` 重转（兜住审计问题1，Douban 两插件实测从 1→2 条转换）② 产物自动跑 check（兜住捕获越界/未声明 enable）③ 自动跑 parity 一致性
+- **check 新增 3 项校验**（对照官方文档）：
+  - 插件 [Rule] 策略严格白名单（DIRECT/PROXY/REJECT 系，官方 plugin.md 限制；超出即错误而非警告）
+  - Rewrite `as` 捕获越界引用（官方"捕获下标不能超过捕获组数量"，兜住审计问题3/5）
+  - `with enable=${未声明参数}` 报错（官方"参数未声明→当前 Script 无效"，兜住审计问题4）
+- **selftest 扩容 49→56**：httpClient mock / $utils md5+b64 / 持久化落盘+跨实例读取 / 官方转换器冒烟 / 点号参数名回归 / URL Rewrite 段兜底
+
+### 验证
+- 内核自测 56/56 · 历史回溯 3/3
+- 全量插件 check：新校验**零误报**（AntiRevoke 17 / Dataoke 1 均为已知死开关问题，非新检查引入）
+
 ## [1.4.0] - 2026-10-24
 
 ### ★ 官方转换器本地集成（调查结论：plugin-converter 是纯浏览器本地实现）
