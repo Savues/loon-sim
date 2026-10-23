@@ -28,8 +28,38 @@ node cli.js har <plugin.lpx> <capture.har>
 # 5. 规则判定 vs 插件声明 对照（回归用）
 node verify-rules.js <plugin.lpx> --from-rule
 
-# 6. 内核自测
+# 6. 旧→新语法转换（官方转换器本地实现）+ 自动兜底（check + parity + [URL Rewrite] 修复）
+node cli.js convert <plugin.lpx> [-o out.lpx]
+
+# 7. 新旧解析一致性（官方转换后两版本决策必须等价）
+node convert-parity.js <plugin.lpx>
+
+# 8. 直接执行 cron / network-changed / generic 脚本（支持 --mock / --persist）
+node cli.js trigger <plugin.lpx> cron --arg k=v
+
+# 9. 生成插件骨架
+node cli.js init my-plugin [dir]
+
+# 10. HAR 回放 + Markdown 报表
+node cli.js har <plugin.lpx> <capture.har> --report out.md
+
+# 11. httpClient 白名单真连（严格 TLS；mock 优先 > 白名单 > simulated）
+node cli.js run <plugin.lpx> --url "..." --allow-net api.example.com --mock mock.json
+
+# 12. 内核自测（65 项）
 node selftest.js
+
+# 13. 全套 CI（自测 → 历史回溯 → 全量插件 check → parity）
+sh ci.sh
+```
+
+### ★ 终端实测前必跑 — 版本探针
+
+终端 curl 测的是**设备已加载配置**，不是仓库最新提交。实测前：
+
+```bash
+sh version-probe.sh <plugin.lpx>          # ✅ 转 0=可测; 🔴 2=设备旧版结论作废
+sh version-probe.sh <plugin.lpx> setup    # 埋/更新探针（改版本号后重跑）
 ```
 
 ---
@@ -94,33 +124,20 @@ node selftest.js
 
 ## 支持的 Loon API
 
-| API | 状态 | 说明 |
-|-----|------|------|
-| `$request` / `$response` | ✅ | 含 `url`/`method`/`headers`/`body`/`status` |
-| `$argument` | ✅ | 三态还原：无参数 `null` / 字符串 / 对象 `{...}` |
-| `$done(obj)` | ✅ | `{}` 原样、`{body}` 替换、`{response}` 构造响应 |
-| `$persistentStore.read/write` | ✅ | 文件持久化到 `.loon-sim-store.json`（可 `--no-persist` 关闭） |
-| `$utils.ungzip` / `gzip` / `md5` / `base64` / `uuid` | ✅ | 纯计算，已实现 |
-| `$notification.post` | ⚠️ | 打印到输出（不真发通知） |
-| `$httpClient.get/post/...` | ⚠️ | **默认禁用**（`--allow-net` 开启，走真实网络） |
-| `$environment` | ⚠️ | 模拟值（`Loon`/版本/设备），非真机 |
-| `$config` | ⚠️ | 简化实现 |
-| `$script` / `$prefs` | ⚠️ | 部分实现 |
+$request / $response / $argument / $done / $notification / $notify / $httpClient（mock/白名单真连/存根三态）/
+$persistentStore / $prefs（字符串语义+文件持久化 --persist）/
+$environment（params/elapsedMs/sandbox） / $script（startTime 为 Date）/
+$utils（gzip/ungzip/base64/md5/sha1/sha256）/ $crypto.aes（真实加解密）/ $dns.query / $config / $loon
 
 ---
 
 ## 已知差异（与真实 Loon）
 
-| 项 | 差异 | 影响 |
-|----|------|------|
-| **JS 引擎** | Node `vm` ≠ JavaScriptCore | 极少数 JSC 特有行为可能不同（本项目脚本未发现） |
-| **`$argument` 形态** | 模拟器统一归一化为**对象** | 真机在未配置参数时可能为 `null`，脚本需自行兼容（本项目 `isEnabled` 已做） |
-| **旧语法多规则** | 一律「第一条命中」 | Loon 旧语法是否全部执行未经官方明确；如需多条生效请实测确认 |
-| **`cron` / `network-changed`** | 仅解析，不执行 | 定时/网络事件类脚本需真机验证 |
-| **TLS / MITM** | 不涉及 | 证书、真实解密、App 网络行为需真机 |
-| **`$httpClient`** | 默认禁用 | 防误发真实请求；`--allow-net` 可开 |
-
-**结论**：模拟器用于**快速迭代与静态回归**；**发布前仍需真机确认一次**。
+- Node vm ≠ JavaScriptCore（极少数语法/精度差异）
+- MITM/TLS/真实网络栈不可模拟 — 带 HTTPS 路径的规则真机需域名在 [Mitm]
+- cron 调度不模拟（trigger 命令可手动执行）
+- Rewrite v2 的 jq / mock_file(文件) 未实现（json.add/delete/replace 已实现）
+- 真机语义已实证项见 docs/（裸路径正则可用 · 双参 reject 可用 · [Rule] 无 enable）
 
 ---
 
@@ -205,13 +222,22 @@ git push → 告知用户更新订阅 → 真机确认一次
 
 ```
 tools/loon-sim/
-├── cli.js          # 入口：check / rules / run / har
-├── lpx.js          # lpx 解析（新旧语法）
-├── matcher.js      # 条件求值 / [Rule] 匹配
-├── runtime.js      # Loon JS 运行时模拟
-├── relevance.js    # 规则相关性判定（过滤输出）
-├── trace.js        # 逐条决策追踪 + body 指纹
-├── report.js       # Loon 风格渲染 + 诊断
-├── verify-rules.js # 规则判定 vs 声明 对照
-└── selftest.js     # 内核自测（46 项）
+├── cli.js            # 入口：check/rules/run/har/convert/init/trigger
+├── lpx.js            # lpx 解析（新旧语法 · splitTopLevel 正则感知）
+├── matcher.js        # 条件求值 / [Rule] 匹配 / DOMAIN-WILDCARD / as 捕获
+├── runtime.js        # Loon JS 运行时（$crypto/$dns/$config/httpClient 三态）
+├── rewrite-exec.js   # Rewrite v2 Action 执行器（30+ Action · 管道语义）
+├── converter.js      # ★ 官方旧→新转换器（从 nsloon.app 提取的本地实现）
+├── convert.js        # convert 命令（转换 + check/parity 兜底 + URL Rewrite 修复）
+├── convert-parity.js # 新旧解析一致性测试
+├── init.js           # 插件脚手架
+├── hosts.js          # 规则域名提取（MITM 矩阵用）
+├── version-probe.sh  # ★ 终端实测前置守护（设备版本 = 仓库版本才可测）
+├── probe-setup.py    # 探针埋入/更新
+├── ci.sh             # 全套 CI（自测→回溯→check→parity）
+├── selftest.js       # 内核自测（65 项）
+├── verify-rules.js   # 规则判定 vs 声明对照
+├── regression-history.sh  # 历史问题版本回溯
+├── docs/             # ★ 官方文档本地存档（8 份 + 转换器审计报告）
+└── examples/         # demo + cron-checkin（trigger+mock+persist 全流程）
 ```
