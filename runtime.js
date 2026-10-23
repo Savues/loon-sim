@@ -11,6 +11,7 @@
 const vm = require('vm');
 const fs = require('fs');
 const zlib = require('zlib');
+const crypto = require('crypto');
 const path = require('path');
 
 /**
@@ -43,17 +44,25 @@ function createRuntime(o = {}) {
     set bodyBytes(v) { /* 只读场景下忽略，脚本一般不写 */ },
   };
 
-  const store = o.store || {};
+  let store = o.store || {};
+  const storeFile = o.storeFile || null;
+  if (storeFile && fs.existsSync(storeFile)) {
+    try { store = JSON.parse(fs.readFileSync(storeFile, 'utf8')); } catch { /* 损坏则重置 */ }
+  }
+  const saveStore = () => { if (storeFile) { try { fs.writeFileSync(storeFile, JSON.stringify(store, null, 1)); } catch { /* 忽略写失败 */ } } };
   const storeApi = {
     read: (k) => (k in store ? store[k] : null),
-    write: (v, k) => { store[k] = v; return true; },
-    remove: (k) => { delete store[k]; return true; },
+    write: (v, k) => { store[k] = v; saveStore(); return true; },
+    remove: (k) => { delete store[k]; saveStore(); return true; },
   };
   const prefsApi = {
     valueForKey: (k) => (k in store ? store[k] : null),
-    setValueForKey: (v, k) => { store[k] = v; return true; },
-    removeValueForKey: (k) => { delete store[k]; return true; },
+    setValueForKey: (v, k) => { store[k] = v; saveStore(); return true; },
+    removeValueForKey: (k) => { delete store[k]; saveStore(); return true; },
   };
+
+  // httpClient mock: { 'url子串或正则': {status, headers, body} } 命中即返回
+  const httpMocks = o.httpMocks || null;
 
   const sandbox = {
     console: {
@@ -80,13 +89,20 @@ function createRuntime(o = {}) {
     $utils: {
       ungzip: (b) => { try { return zlib.gunzipSync(toBuffer(b)); } catch (e) { try { return zlib.inflateSync(toBuffer(b)); } catch (e2) { return b; } } },
       gzip: (b) => zlib.gzipSync(toBuffer(b)),
+      base64: {
+        encode: (b) => toBuffer(b).toString('base64'),
+        decode: (b) => toBuffer(String(b), 'base64'),
+      },
+      md5: (b) => crypto.createHash('md5').update(toBuffer(b)).digest('hex'),
+      sha1: (b) => crypto.createHash('sha1').update(toBuffer(b)).digest('hex'),
+      sha256: (b) => crypto.createHash('sha256').update(toBuffer(b)).digest('hex'),
       geohistoricaldata: () => ({}),
     },
     $httpClient: {
-      get: (a, cb) => httpReq('GET', a, cb, logs),
-      post: (a, cb) => httpReq('POST', a, cb, logs),
-      put: (a, cb) => httpReq('PUT', a, cb, logs),
-      delete: (a, cb) => httpReq('DELETE', a, cb, logs),
+      get: (a, cb) => httpReq('GET', a, cb, logs, httpMocks),
+      post: (a, cb) => httpReq('POST', a, cb, logs, httpMocks),
+      put: (a, cb) => httpReq('PUT', a, cb, logs, httpMocks),
+      delete: (a, cb) => httpReq('DELETE', a, cb, logs, httpMocks),
     },
     setTimeout,
     setInterval,
@@ -109,7 +125,7 @@ function createRuntime(o = {}) {
       try {
         // Loon 把脚本包在函数作用域内执行（故允许顶层 return）
         const wrapped = '(function () {\n' + code + '\n})();';
-        vm.runInContext(wrapped, ctx, { filename: scriptPath, timeout: 20000 });
+        vm.runInContext(wrapped, ctx, { filename: scriptPath, timeout: o.timeout || 20000 });
       } catch (e) {
         return { ok: false, error: e.message, logs, done, doneCalled };
       }
@@ -128,17 +144,30 @@ function normalizeDone(v) {
   return out;
 }
 
-function httpReq(method, args, cb, logs) {
-  // 本地模拟：不真的发请求，避免副作用；返回空响应
-  logs.push(`[httpClient] ${method} ${typeof args === 'string' ? args : args?.url || ''} (simulated, not sent)`);
-  if (typeof cb === 'function') setImmediate(() => cb(null, { status: 200, headers: {}, body: '' }, ''));
+function httpReq(method, args, cb, logs, mocks) {
+  const url = typeof args === 'string' ? args : (args?.url || '');
+  logs.push(`[httpClient] ${method} ${url} (${mocks && matchMock(url, mocks) ? 'mocked' : 'simulated, not sent'})`);
+  let resp = { status: 200, headers: {}, body: '' };
+  if (mocks) {
+    const m = matchMock(url, mocks);
+    if (m) resp = { status: m.status ?? 200, headers: m.headers || {}, body: m.body ?? '' };
+  }
+  if (typeof cb === 'function') setImmediate(() => cb(null, resp, resp.body));
+}
+
+function matchMock(url, mocks) {
+  for (const k of Object.keys(mocks)) {
+    if (k.startsWith('/') && k.endsWith('/') && new RegExp(k.slice(1, -1)).test(url)) return mocks[k];
+    if (url.includes(k)) return mocks[k];
+  }
+  return null;
 }
 
 function toBuffer(b) {
   if (!b) return Buffer.alloc(0);
   if (Buffer.isBuffer(b)) return b;
   if (b instanceof Uint8Array) return Buffer.from(b);
-  if (typeof b === 'string') return Buffer.from(b, 'binary');
+  if (typeof b === 'string') return typeof enc === 'string' ? Buffer.from(b, enc) : Buffer.from(b, 'binary');
   return Buffer.from(String(b));
 }
 function toBytes(b) {

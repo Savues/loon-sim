@@ -3,6 +3,27 @@
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ---
+## [1.3.0] - 2026-10-24
+
+### 新增
+
+- **`$httpClient` mock 响应**：`--mock substr:{...}`（可重复）或 `--mock file.json`，命中即返回自定义 status/headers/body —— 签到类脚本可全流程离线跑通（`runtime.js`）
+- **`$persistentStore` 跨 run 持久化**：`--persist <file>` 指定存储文件，可测「第二次运行」逻辑
+- **`$utils` 补全**：`base64.encode/decode`、`md5`、`sha1`、`sha256`（Node crypto 真实实现）
+- **`trigger` 子命令**：`node cli.js trigger <lpx> cron [--arg k=v]` 直接执行 cron/network-changed/generic 触发的脚本
+- **`--mitm-matrix`**：check 输出「规则域名 × MITM 覆盖」汇总矩阵（含 `(?:a|b)` 分组展开）
+- **cron 表达式校验**：5/6 位格式与字符集检查
+- **[Rule] 策略校验**：非内置策略且非插件参数时告警（对应 "Can not find policy" 事故模式）
+- **退出码语义化**：check 0/2（通过/错误），run 0/3/4（命中/未命中/脚本异常），trigger 3/4 —— 可接 CI
+- **`--timeout`**：尊重规则 `timeout=` 参数（原先硬编码 20s）
+- **`img-url` 加入 with 字段白名单**（官方合法字段，AgentRouter 实际在用）
+
+### 验证
+
+- 内核自测 49/49 · 历史回溯 3/3 · 全量插件 44/47 零错误
+- httpClient mock：`status=201 + body.ok=true` 正确到达回调
+- 持久化：二次运行读取上次写入值
+
 ## [1.2.1] - 2026-10-23
 
 ### 修复

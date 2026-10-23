@@ -98,7 +98,7 @@ function cmdCheck() {
   }
 
   // 4) [Script] with 字段白名单（官方 7 个）
-  const WITH_FIELDS = new Set(['enable', 'tag', 'img_url', 'timeout', 'debug', 'requires_body', 'binary_body_mode']);
+  const WITH_FIELDS = new Set(['enable', 'tag', 'img_url', 'timeout', 'debug', 'requires_body', 'binary_body_mode', 'img-url']);
   for (const r of p.scriptRules) {
     if (r.invalid && r.invalid !== 'unparsed') { console.log(`❌ [Script] ${r.invalid}: ${r.raw.slice(0, 70)}`); errs++; }
     // 旧语法(script-path / requires-body / argument=[{...}])字段名与新语法不同 → 单独校验
@@ -148,8 +148,112 @@ function cmdCheck() {
     if (!mitmSet.has(h) && !p.rules.some(r => r.value === h)) console.log(`⚠️  规则引用 ${h} 但不在 [Mitm] 也不在 [Rule]（路径规则将失效）`);
   }
 
+  // cron 表达式格式校验 (官方支持 5 位「分时日月周」与 6 位「秒分时日月周」)
+  for (const r of p.scriptRules) {
+    if (r.trigger === 'cron' && r.cronExpr) {
+      const ce = r.cronExpr.trim();
+      const parts = ce.split(/\s+/);
+      const okLen = parts.length === 5 || parts.length === 6;
+      const okVal = parts.every(x => /^[*\/,-\d]+$/.test(x));
+      if (!okLen || !okVal) {
+        console.log(`❌ [Script] cron 表达式非法 "${ce}"（应为 5 位或 6 位，字段仅允许 * / , - 数字）`);
+        errs++;
+      }
+    }
+  }
+
+  // [Rule] 策略合法性
+  const VALID_POLICY = /^(REJECT|DIRECT|PROXY|REJECT-DROP|REJECT-NO-DROP)$/i;
+  for (const r of p.rules) {
+    if (r.policy && !VALID_POLICY.test(r.policy) && !(r.policy in (p.args || {}))) {
+      console.log(`⚠️ [Rule] 策略 "${r.policy}" 不是内置策略，也不是本插件参数（若为订阅策略组名请忽略）: ${r.raw?.slice(0, 60) || ''}`);
+      warns++;
+    }
+  }
+
+  // MITM 覆盖矩阵: 汇总所有带路径规则的域名 vs [Mitm] 列表
+  if (flag('mitm-matrix')) {
+    const { extractHosts } = require('./hosts');
+    const hosts = new Map();
+    const add = (h, src) => { if (!hosts.has(h)) hosts.set(h, []); hosts.get(h).push(src); };
+    for (const r of p.scriptRules) for (const h of extractHosts(r.condition)) add(h, 'script');
+    for (const r of p.rewriteRules) for (const h of extractHosts(r.condition || r.raw)) add(h, 'rewrite');
+    if (hosts.size) {
+      console.log('\n▸ MITM 覆盖矩阵');
+      for (const [h, srcs] of hosts) {
+        const covered = p.mitm.some(m => m === h || h.endsWith(m.replace(/^\*\./, '.')) || (m.startsWith('*.') && h.endsWith(m.slice(1))));
+        console.log(`  ${covered ? '✅' : '❌ 未覆盖'} ${h}  ← ${[...new Set(srcs)].join('/')}`);
+        if (!covered) warns++;
+      }
+    }
+  }
+
   console.log(`\n结果: ${errs} 错误, ${warns} 警告  |  [Rule] ${p.rules.length} · [Script] ${p.scriptRules.length} · [Rewrite] ${p.rewriteRules.length} · [Mitm] ${p.mitm.length} · [Argument] ${Object.keys(p.args).length}`);
   return errs;
+}
+
+// ---------- helpers ----------
+function buildArgument(r) {
+  const out = {};
+  const vals = {};
+  for (let i = 0; i < process.argv.length; i++) {
+    if (process.argv[i] === '--arg') {
+      const kv = process.argv[i + 1] || '';
+      const [k, ...rest] = kv.split('=');
+      let v = rest.join('=');
+      if (v === 'true') v = true; else if (v === 'false') v = false;
+      else if (/^-?\d+$/.test(v)) v = Number(v);
+      vals[k] = v;
+    }
+  }
+  for (const k of (r.argumentKeys || [])) out[k] = (k in vals) ? vals[k] : (lpx.args[k]?.default ?? null);
+  return out;
+}
+
+function loadMocks() {
+  const specs = [];
+  for (let i = 0; i < process.argv.length; i++) {
+    if (process.argv[i] === '--mock') specs.push(process.argv[i + 1] || '');
+  }
+  if (!specs.length) return null;
+  const mocks = {};
+  for (const sp of specs) {
+    if (sp.endsWith('.json') && fs.existsSync(sp)) {
+      Object.assign(mocks, JSON.parse(fs.readFileSync(sp, 'utf8')));
+    } else {
+      const idx = sp.indexOf(':');
+      if (idx > 0) {
+        try { mocks[sp.slice(0, idx)] = JSON.parse(sp.slice(idx + 1)); } catch { /* 忽略非法 */ }
+      }
+    }
+  }
+  return mocks;
+}
+
+// ---------- trigger ----------
+function cmdTrigger() {
+  const kind = arg('_', 'cron'); // cron | network-changed | generic
+  const rules = (lpx.scriptRules || []).filter(r => r.trigger === kind);
+  if (!rules.length) { console.log(`无 ${kind} 触发的脚本规则`); process.exit(3); }
+  console.log(`找到 ${rules.length} 条 ${kind} 规则:`);
+  let code = 0;
+  for (const r of rules) {
+    const sim = resolveSimPath(r.script || r.scriptPath);
+    console.log(`\n▸ ${r.cronExpr || kind} → ${path.basename(sim)}`);
+    if (!fs.existsSync(sim)) { console.log('  ❌ 本地找不到脚本'); code = 4; continue; }
+    const rt = createRuntime({
+      request: { url: '' }, argument: buildArgument(r),
+      scriptName: path.basename(sim), debug: flag('verbose'),
+      httpMocks: loadMocks(), storeFile: arg('persist') || null,
+      timeout: Number(r.options?.timeout || arg('timeout', 20000)),
+    });
+    const res = rt.run(sim);
+    (res.logs || []).forEach(l => console.log('  | ' + l));
+    if (!res.ok) { console.log('  ❌ ' + res.error); code = 4; }
+    else if (res.doneCalled && res.done && Object.keys(res.done).length) console.log('  $done → ' + JSON.stringify(res.done).slice(0, 200));
+    else console.log('  ✓ 执行完成');
+  }
+  process.exit(code);
 }
 
 // ---------- run ----------
@@ -210,6 +314,9 @@ function cmdRun() {
           argument: f === 'array' ? [eff.argument] : eff.argument,
           scriptName: path.basename(sim),
           debug: flag('verbose'),
+          httpMocks: loadMocks(),
+          storeFile: arg('persist') || null,
+          timeout: Number(arg('timeout', 20000)),
         });
         runs[f] = rt.run(sim);
       }
@@ -260,6 +367,9 @@ function cmdRun() {
   if (hr) console.log(`  ${'[Rule] 命中: ' + hr.raw}`);
   if (done && done.preview) console.log('  ' + '前 200 字符: ' + done.preview);
   console.log('');
+  // 退出码: 0=命中且成功 / 3=无规则命中 / 4=脚本异常
+  if (eff && done && done.error) process.exit(4);
+  if (!eff && !blockedBy && !hr) process.exit(3);
 }
 
 /** 把插件里的远程脚本 URL 映射为本地文件 */
@@ -336,7 +446,8 @@ function cmdRules() {
   console.log(`\n[Rule] ${lpx.rules.length} 条 · [Script] ${lpx.scriptRules.length} 条 · [Rewrite] ${lpx.rewriteRules.length} 条 · [Mitm] ${lpx.mitm.length}`);
 }
 
-if (cmd === 'check') process.exit(cmdCheck() ? 1 : 0);
+if (cmd === 'check') { const e = cmdCheck(); process.exit(e ? 2 : 0); }
+else if (cmd === 'trigger') cmdTrigger();
 else if (cmd === 'run' || cmd === 'trace') cmdRun();
 else if (cmd === 'har') cmdHar();
 else if (cmd === 'rules') cmdRules();
