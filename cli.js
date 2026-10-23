@@ -186,7 +186,7 @@ function cmdRun() {
   // 逐条追踪
   const { traceRewriteRules, traceScriptRules } = require('./trace');
   const { renderTrace } = require('./report');
-  const rewrite = traceRewriteRules(lpx, url, 'request', argValues);   // 请求侧先评估
+  const rewrite = traceRewriteRules(lpx, url, phase, argValues);   // 根据 --phase 参数评估
   const blockedBy = rewrite.find(r => r.result === 'match' && r.terminating);
   const scriptRes = blockedBy ? { rules: [], effective: null } : traceScriptRules(lpx, url, phase, argValues);
 

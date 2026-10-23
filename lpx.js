@@ -242,7 +242,25 @@ function parseRewriteRules(lines) {
   for (const line of lines || []) {
     const m = /^(request|response)\s+if\s+(.+?)\s+then\s+(.+)$/is.exec(line);
     if (m) out.push({ raw: line, phase: m[1], condition: m[2].trim(), action: m[3].trim(), legacy: false });
-    else out.push({ raw: line, phase: null, condition: null, action: line, legacy: true });
+    else {
+      // 兼容旧版 Rewrite 语法: ^regex action target (无 request/response 前缀)
+      const lm = /^\^(\S+)\s+(.*)$/is.exec(line);
+      if (lm) {
+        // 旧语法: ^regex action target
+        // 需要判断是 request 还是 response 阶段
+        // 如果 action 包含 header/body/reject/redirect 等关键字，推断为 response
+        // 否则默认为 request
+        const act = lm[2].trim();
+        const isResponse = /header|body|reject|redirect/i.test(act);
+        const ph = isResponse ? 'response' : 'request';
+        let rx = lm[1];
+        const cond = '\${url} ~= /' + rx + '/i';
+        const action = lm[2].trim();
+        out.push({ raw: line, phase: ph, condition: cond, action: act, legacy: true });
+        continue;
+      }
+      out.push({ raw: line, phase: null, condition: null, action: line, legacy: true });
+    }
   }
   return out;
 }
