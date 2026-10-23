@@ -195,6 +195,12 @@ git push → 告知用户更新订阅 → 真机确认一次
 
 ---
 
+## 更新记录
+
+见 [CHANGELOG.md](CHANGELOG.md)。
+
+---
+
 ## 目录
 
 ```
