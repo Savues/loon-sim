@@ -83,52 +83,110 @@ function traceScriptRules(lpx, url, phase, argValues) {
 }
 
 // ---- body 指纹（用于展示"改了什么"而无需打印全文）----
-function fingerprint(body) {
-  if (typeof body !== 'string') return null;
-  const fp = { '长度': body.length + 'B' };
-  try {
-    const d = JSON.parse(body);
-    // 只统计【顶层区块规模】，不列出每个子键（避免噪音）
-    for (const k of ['sc', 'ac', 'data', 'dataList', 'resources', 'caches', 'result']) {
-      const v = d[k];
-      if (Array.isArray(v)) fp[`${k}[]`] = v.length + ' 项';
-      else if (v && typeof v === 'object') fp[`${k}{}`] = Object.keys(v).length + ' 键';
-    }
-    if (d.data && typeof d.data === 'object' && !Array.isArray(d.data)) {
-      for (const k of ['duration', 'dataList', 'result', 'tabs', 'keywords', 'hotwords', 'result']) {
-        const v = d.data[k];
-        if (Array.isArray(v)) fp[`data.${k}[]`] = v.length + ' 项';
-        else if (v !== undefined && typeof v !== 'object') fp[`data.${k}`] = String(v).slice(0, 24);
-        else if (v && typeof v === 'object') fp[`data.${k}{}`] = Object.keys(v).length + ' 键';
+/**
+ * body 结构指纹 —— 完全通用, 不依赖任何领域词汇
+ *
+ * 思路: 把 JSON body 的「结构形状」抽出来(数组长度 / 对象键数),
+ * 脚本执行前后各取一次, 按变化幅度排序输出。
+ * 这样任何插件、任何接口都用同一套机制看到"脚本到底改了什么",
+ * 无需为特定 App 维护关键词表。
+ *
+ * 需要观察特定字段出现次数时, 用 --watch <词1,词2> 显式传入(默认无)。
+ */
+
+const MAX_DEPTH = 6;
+const MAX_REPORT = 12;
+
+/** 递归收集结构形状 */
+function collectShape(node, path, out, depth) {
+  // 只收集「顶层 + 一层对象」的结构规模。
+  // 再深的结构(如 sc 内每个 key 下的数组)在脚本清理时通常只是"父级键数归零"的后果,
+  // 若全递归会输出海量噪音, 掩盖真正的问题。
+  if (depth > 1) return;
+  if (Array.isArray(node)) {
+    out.push({ path: path + '[]', size: node.length });
+    return;
+  }
+  if (node && typeof node === 'object') {
+    out.push({ path: path + '{}', size: Object.keys(node).length });
+    if (depth < 1) {
+      for (const k of Object.keys(node)) {
+        const v = node[k];
+        if (v && typeof v === 'object') collectShape(v, path + '.' + k, out, depth + 1);
       }
     }
-  } catch (e) { /* 非 JSON：只给长度 */ }
-  // 通用特征
-  const feats = [
-    ['cdnId 清零', /"cdnId":"0{32}"/g],
-    ['reject 空对象', /^\{\}$/],
-  ];
-  for (const [name, re] of feats) {
-    const n = (body.match(re) || []).length;
-    if (n) fp[name] = n + ' 处';
   }
-  for (const kw of ['__TANX', 'adType', 'mst_roll', 'hotwords']) {
-    const n = (body.match(new RegExp(kw, 'g')) || []).length;
-    if (n) fp[kw] = n + ' 处';
+}
+
+/** 结构形状 → Map */
+function shapeMap(body) {
+  try {
+    const d = JSON.parse(body);
+    const arr = [];
+    collectShape(d, '', arr, 0);
+    const m = new Map();
+    for (const it of arr) if (!m.has(it.path)) m.set(it.path, it.size);
+    return m;
+  } catch (e) {
+    return null;
+  }
+}
+
+/** 通用指纹: 长度 + 结构规模 + 可选 watch 词频 */
+function fingerprint(body, opts) {
+  if (typeof body !== 'string') return null;
+  const fp = { '长度': body.length + 'B' };
+  const shape = shapeMap(body);
+  if (shape) {
+    for (const [k, v] of shape) fp['shape' + k] = v;
+  } else {
+    fp['(非 JSON)'] = '-';
+  }
+  const watch = (opts && opts.watch) || [];
+  for (const w of watch) {
+    if (!w) continue;
+    const n = body.split(w).length - 1;
+    fp['watch:' + w] = n + ' 处';
   }
   return fp;
 }
 
-/** 比较两个 body 的指纹，返回差异列表 */
-function diffFingerprint(before, after) {
-  const a = fingerprint(before) || {}, b = fingerprint(after) || {};
-  const out = [];
+/** 比较两个 body 的指纹, 返回【按变化幅度排序】的差异(最多 MAX_REPORT 条) */
+function diffFingerprint(before, after, opts) {
+  const a = fingerprint(before, opts) || {};
+  const b = fingerprint(after, opts) || {};
+  const items = [];
   const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
   for (const k of keys) {
     if (k === '长度') continue;
-    if (a[k] !== b[k]) out.push({ key: k, from: a[k] ?? '—', to: b[k] ?? '—' });
+    const av = a[k], bv = b[k];
+    if (av === bv) continue;
+    let weight;
+    if (k.startsWith('shape') && typeof av === 'number' && typeof bv === 'number') {
+      weight = Math.abs(av - bv);
+    } else if (k.startsWith('watch:')) {
+      weight = 1000;
+    } else {
+      weight = 500;
+    }
+    const label = k.replace(/^shape/, '').replace(/^\./, '') || '(根)';
+    items.push({ key: label, from: av === undefined ? '-' : av, to: bv === undefined ? '-' : bv, weight });
   }
-  return out;
+  items.sort((x, y) => y.weight - x.weight);
+
+  // ★ 祖先去重: 若父级路径已被选中, 其子级变化只是父级变化的后果 → 跳过
+  const norm = p => p.replace(/\{\}$/, '').replace(/\[\]$/, '');
+  const isDesc = (child, parent) => {
+    const c = norm(child), p = norm(parent);
+    return c !== p && (c.startsWith(p + '.') || c.startsWith(p + '['));
+  };
+  const sel = [];
+  for (const it of items) {
+    if (sel.some(s => isDesc(it.key, s.key))) continue;
+    sel.push(it);
+    if (sel.length >= MAX_REPORT) break;
+  }
+  return sel;
 }
 
-module.exports = { traceRewriteRules, traceScriptRules, evalCondSafe, fingerprint, diffFingerprint };
+module.exports = { traceRewriteRules, traceScriptRules, evalCondSafe, fingerprint, diffFingerprint, shapeMap };

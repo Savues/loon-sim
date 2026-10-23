@@ -10,6 +10,7 @@ const path = require('path');
 const { parseArguments, parseScriptRules, parseRules, parseMitm, splitTopLevel } = require('./lpx');
 const { evalCondition, buildArgument, matchRule } = require('./matcher');
 const { createRuntime } = require('./runtime');
+const { diffFingerprint, shapeMap } = require('./trace');
 const fs = require('fs');
 
 let pass = 0, fail = 0;
@@ -199,6 +200,28 @@ t('异步 $done（setTimeout）', () => {
 });
 
 /* ---------- 8. splitTopLevel 边界 ---------- */
+console.log('⑧b 通用结构指纹');
+t('识别数组长度变化', () => {
+  const b = JSON.stringify({ sc: { a: [1], b: [2,3], c: [4] }, ac: { x: 1 } });
+  const a = JSON.stringify({ sc: {}, ac: { x: 1 } });
+  const d = diffFingerprint(b, a);
+  assert.ok(d.some(x => x.key === 'sc{}' && x.from === 3 && x.to === 0), '应报 sc{} 3→0: ' + JSON.stringify(d));
+});
+t('不深入数组元素(避免噪音)', () => {
+  const big = { list: Array.from({ length: 100 }, (_, i) => ({ id: i })) };
+  const b = JSON.stringify(big), a = JSON.stringify({ list: [] });
+  assert.strictEqual(shapeMap(b).get('.list[]'), 100);
+  assert.strictEqual(shapeMap(a).get('.list[]'), 0);
+  const d = diffFingerprint(b, a);
+  assert.ok(d.every(x => !x.key.includes('[0]')), '不应深入数组元素: ' + JSON.stringify(d));
+});
+t('祖先去重', () => {
+  const b = JSON.stringify({ a: { b: { c: [1,2,3] } } });
+  const a = JSON.stringify({ a: {} });
+  const d = diffFingerprint(b, a);
+  assert.ok(d.every(x => !x.key.includes('.a.b')), '应只报 .a{} 变化: ' + JSON.stringify(d));
+});
+
 console.log('⑧ 顶层切分');
 t('不切分括号内逗号', () => assert.deepStrictEqual(splitTopLevel('f(a,b),c', ','), ['f(a,b)', 'c']));
 t('不切分引号内逗号', () => assert.deepStrictEqual(splitTopLevel('"a,b",c', ','), ['"a,b"', 'c']));
