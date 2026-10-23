@@ -12,7 +12,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { parseLpx } = require('./lpx');
+const { parseLpx, splitTopLevel } = require('./lpx');
 const { matchRequest, matchRule, evalCondition } = require('./matcher');
 const { createRuntime, toBuffer } = require('./runtime');
 
@@ -98,19 +98,46 @@ function cmdCheck() {
   }
 
   // 4) [Script] with 字段白名单（官方 7 个）
-  const WITH_FIELDS = new Set(['enable', 'tag', 'img_url', 'timeout', 'debug', 'requires_body', 'binary_body_mode', 'img-url']);
+  const WITH_FIELDS = new Set(['enable', 'tag', 'img_url', 'timeout', 'debug', 'requires_body', 'binary_body_mode']);
+  const LEGACY_WITH = new Set(['img-url', 'requires-body', 'binary-body-mode']); // 旧语法字段, legacy 规则专用
   for (const r of p.scriptRules) {
     if (r.invalid && r.invalid !== 'unparsed') { console.log(`❌ [Script] ${r.invalid}: ${r.raw.slice(0, 70)}`); errs++; }
     // 旧语法(script-path / requires-body / argument=[{...}])字段名与新语法不同 → 单独校验
     if (r.legacy) {
       if (!r.scriptPath) { console.log(`❌ [Script-旧语法] 缺 script-path`); errs++; }
       for (const k of (r.argumentKeys || [])) if (!(k in p.args)) { console.log(`❌ [Script-旧语法] 引用未声明参数 \${${k}}`); errs++; }
+      for (const k of Object.keys(r.options || {})) {
+        if (!LEGACY_WITH.has(k) && k !== 'enable' && k !== 'enabled' && k !== 'tag' && k !== 'timeout' && k !== 'argument' && k !== 'debug') {
+          console.log(`❌ [Script-旧语法] 未知字段 "${k}": ${r.raw.slice(0, 60)}`); errs++;
+        }
+      }
       continue;
     }
     for (const k of Object.keys(r.options || {})) {
-      if (!WITH_FIELDS.has(k)) { console.log(`❌ [Script] with 未知字段 "${k}"（官方：未知字段会使当前规则无效）: ${r.raw.slice(0, 60)}`); errs++; }
+      if (!WITH_FIELDS.has(k)) {
+        const hint = LEGACY_WITH.has(k) || LEGACY_WITH.has(k.replace(/_/g, '-')) ? '（旧语法字段名 — 新语法用 snake_case）' : '（官方：未知字段会使当前规则无效）';
+        console.log(`❌ [Script] with 未知字段 "${k}" ${hint}: ${r.raw.slice(0, 60)}`);
+        errs++;
+      } else if (k !== k.toLowerCase()) {
+        console.log(`❌ [Script] with 字段 "${k}" 必须全小写 snake_case（官方：字段名区分大小写）`);
+        errs++;
+      }
     }
-    if (r.phase === 'response' && !r.condition.includes('${url}')) { console.log(`❌ Response Script 缺强制 URL Guard`); errs++; }
+    if (r.phase === 'response' && r.condition) {
+      const cond = r.condition;
+      if (!cond.includes('${url}')) {
+        console.log(`❌ Response Script 缺强制 URL Guard: ${r.raw?.slice(0, 70) || ''}`);
+        errs++;
+      } else {
+        // 顶层 || 会拆散必要性: 提取顶层 (无括号包裹) 的 || 分支检查
+        const parts = splitTopLevel(cond, '||');
+        const urlGuarded = parts.length === 1 || parts.every(pt => pt.includes('${url}'));
+        if (!urlGuarded) {
+          console.log(`❌ Response Script 的 URL Guard 非必要条件（顶层 || 使 URL 可被绕过）: ${r.raw?.slice(0, 70) || ''}`);
+          errs++;
+        }
+      }
+    }
     // 引用的参数必须在 [Argument] 中声明
     if (r.invalid) { console.log(`❌ [Script] 规则无法解析: ${String(r.raw).slice(0, 90)}`); errs++; continue; }
     for (const k of (r.argumentKeys || [])) if (!(k in p.args)) { console.log(`❌ [Script] 引用了未声明的参数 \${${k}}`); errs++; }
@@ -146,6 +173,24 @@ function cmdCheck() {
   for (const h of needs) {
     if (!h || h.includes('*')) continue;
     if (!mitmSet.has(h) && !p.rules.some(r => r.value === h)) console.log(`⚠️  规则引用 ${h} 但不在 [Mitm] 也不在 [Rule]（路径规则将失效）`);
+  }
+
+  // 插件对象参数约束: {${a},${b}} 不能空/重复/未声明 (官方: 违反→当前规则无效)
+  for (const r of p.scriptRules) {
+    if (r.invalid) continue; // 解析失败的规则已由上面报过, 不重复
+    // 判断是否对象参数: 新语法 {${a},${b}} → argumentKeys 非空; 旧语法 argumentLiteral 形如 {a,b} 或 [{a},{b}]
+    const raw = r.raw || '';
+    const isObjArg = /script\([^)]*,\s*\{/.test(raw) || /script\([^)]*,\s*\[\{/.test(raw) || /argument=\{[^\[]/.test(raw);
+    const names = r.argumentKeys || [];
+    if (isObjArg || (names.length && !/script\([^)]*,\s*["\`]/.test(raw))) {
+      if (isObjArg && !names.length) { console.log(`❌ [Script] 对象参数为空 {}（官方: 无效）: ${r.raw?.slice(0, 60)}`); errs++; continue; }
+      if (!names.length) continue;
+      const dup = names.find((n, i) => names.indexOf(n) !== i);
+      if (dup) { console.log(`❌ [Script] 对象参数重复引用 ${dup}（官方: 无效）`); errs++; }
+      const undeclared = names.filter(n => !(n in (p.args || {})));
+      for (const n of undeclared) { console.log(`❌ [Script] 对象参数引用未声明参数 "${n}"（官方: 只能引用本插件 [Argument]）`); errs++; }
+      if (names.some(n => n === 'url')) { console.log(`❌ [Script] 对象参数不能引用 \${url}（保留变量）`); errs++; }
+    }
   }
 
   // cron 表达式格式校验 (官方支持 5 位「分时日月周」与 6 位「秒分时日月周」)

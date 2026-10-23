@@ -97,15 +97,18 @@ function parseArguments(lines) {
 
 /** 按顶层分隔符切分（不进入引号/正则/括号内部） */
 function splitTopLevel(s, sep) {
-  const out = []; let depth = 0, q = null, esc = false, cur = '';
-  for (const ch of s) {
+  const out = []; let depth = 0, q = null, esc = false, re = false; let cur = '';
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
     if (esc) { cur += ch; esc = false; continue; }
     if (ch === '\\') { cur += ch; esc = true; continue; }
     if (q) { cur += ch; if (ch === q) q = null; continue; }
     if (ch === '"' || ch === "'" || ch === '`') { q = ch; cur += ch; continue; }
+    if (ch === '/' && !re && depth === 0 && /[=~\s(]$/.test(cur)) { re = true; cur += ch; continue; }
+    if (re) { cur += ch; if (ch === '/') re = false; continue; }
     if (ch === '(' || ch === '{' || ch === '[') depth++;
     if (ch === ')' || ch === '}' || ch === ']') depth--;
-    if (ch === sep && depth === 0) { out.push(cur); cur = ''; continue; }
+    if (depth === 0 && s.startsWith(sep, i)) { out.push(cur); cur = ''; i += sep.length - 1; continue; }
     cur += ch;
   }
   out.push(cur);
@@ -182,7 +185,7 @@ function parseScriptRules(lines) {
             scriptPath: scriptPath,
             argumentKeys: keys, argumentLiteral: argRaw,
             options: opts, invalid: null,
-            legacy: false,
+            legacy: true,
           });
           continue;
         }
