@@ -3,6 +3,34 @@
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ---
+## [1.6.0] - 2026-10-24
+
+### P3-A: $httpClient 白名单真连
+
+- `--allow-net domain1,domain2`：白名单内域名**真实发起请求**（严格 TLS — Loon 根证书已装入 ISH 系统信任库，实测 mtop 接口 200 + `SSL verify ok`）
+- **三重防护**：mock 优先 > 白名单真连 > 白名单外保持 simulated（防脚本误打生产接口）
+- gzip/deflate/br 自动解压；子域匹配（`example.com` 覆盖 `cdn.example.com`）
+
+### P3-B: 运行时 API 对齐官方 script-api.md
+
+- `$persistentStore`：值字符串化（官方"以字符串保存"）· 省略 Key 用脚本名 · `remove()` 无参=清空
+- `$script.startTime` → Date 对象 · `$script.type`
+- `$environment.params`（参数快照）/ `elapsedMs` / `sandbox.type`
+- **`$crypto.aes` 真实实现**（Node crypto，encrypt/decrypt 往返验证）
+- `$dns.query`（Node dns 模拟）· `$config.*` API 面补齐
+
+### trigger 命令修复 + 示例
+
+- **异步脚本等待**：httpClient 回调类脚本此前同步退出导致结果丢失 → 现按官方语义"等待 $done"
+- 新增 `examples/cron-checkin/`：签到类插件全流程演示（trigger + mock + persist + notification，二次运行读到上次签到记录 ✅）
+
+### P2 尾巴
+
+- `.github/workflows/loon-sim.yml`：push/PR 自动跑 `ci.sh`（GitHub Actions）
+
+### 验证
+- selftest 65/65（新增 ⑩ 白名单防护 3 项 + ⑪ API 对齐 6 项）· CI 全绿 · 全量插件 check 0 新问题
+
 ## [1.5.0] - 2026-10-24
 
 ### P1: 语法覆盖补全（对照官方文档存档）

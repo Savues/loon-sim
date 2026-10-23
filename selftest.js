@@ -281,5 +281,71 @@ t('URL Rewrite 段兜底 (convert.js 逻辑)', () => {
   assert.strictEqual(r.converted, 1, '改写段名后可转换');
 });
 
+console.log('⑩ P3-A allowNet 白名单真连');
+t('白名单外域名保持 simulated (防泄漏)', () => {
+  const fs = require('fs');
+  fs.writeFileSync('/tmp/st_net.js', '$httpClient.get({url:"https://evil.example.com/x"},(e,r)=>{$done({});});');
+  const { createRuntime } = require('./runtime');
+  const rt = createRuntime({ request: { url: 'https://x/' }, allowNet: ['good.com'] });
+  const res = rt.run('/tmp/st_net.js');
+  assert.ok(res.logs.join('').includes('不在白名单'), '应被白名单拦截: ' + res.logs.join('|'));
+});
+t('mock 优先级高于真连', () => {
+  const fs = require('fs');
+  fs.writeFileSync('/tmp/st_net2.js', '$httpClient.get({url:"https://api.t.com/v1"},(e,r)=>{console.log("S="+r.status);$done({});});');
+  const { createRuntime } = require('./runtime');
+  const rt = createRuntime({ request: { url: 'https://x/' }, httpMocks: { 'api.t.com': { status: 999, body: 'M' } }, allowNet: ['api.t.com'] });
+  const res = rt.run('/tmp/st_net2.js');
+  assert.ok(res.logs.join('').includes('mocked'), 'mock 应优先: ' + res.logs.join('|'));
+});
+t('allowNet 域名含子域匹配', () => {
+  const { createRuntime } = require('./runtime');
+  const rt = createRuntime({ allowNet: ['example.com'] });
+  // 内部函数级验证: 通过日志判断 (cdn.example.com 应允许)
+  const fs = require('fs');
+  fs.writeFileSync('/tmp/st_net3.js', '$httpClient.get({url:"https://cdn.example.com/x"},()=>{$done({});});');
+  const res = rt.run('/tmp/st_net3.js');
+  assert.ok(res.logs.join('').includes('REAL'), '子域应真连: ' + res.logs.join('|'));
+});
+
+console.log('⑪ P3-B 运行时 API 对齐');
+t('$persistentStore 值字符串化 (官方语义)', () => {
+  const { createRuntime } = require('./runtime');
+  const rt = createRuntime({});
+  rt.sandbox.$persistentStore.write(123, 'n');
+  assert.strictEqual(rt.sandbox.$persistentStore.read('n'), '123', '数字应存为字符串');
+});
+t('$persistentStore.remove() 无参清空', () => {
+  const { createRuntime } = require('./runtime');
+  const rt = createRuntime({ store: { a: '1', b: '2' } });
+  rt.sandbox.$persistentStore.remove();
+  assert.strictEqual(rt.sandbox.$persistentStore.read('a'), null, '应清空');
+});
+t('$script.startTime 是 Date', () => {
+  const { createRuntime } = require('./runtime');
+  const rt = createRuntime({});
+  assert.ok(rt.sandbox.$script.startTime instanceof Date, 'startTime 应为 Date');
+});
+t('$environment.params 参数快照', () => {
+  const { createRuntime } = require('./runtime');
+  const rt = createRuntime({ argument: { region: 'CN' } });
+  assert.strictEqual(rt.sandbox.$environment.params.region, 'CN');
+  assert.ok(typeof rt.sandbox.$environment.elapsedMs === 'number');
+});
+t('$crypto.aes 加解密往返', () => {
+  const { createRuntime } = require('./runtime');
+  const rt = createRuntime({});
+  const opt = { key: '0123456789abcdef0123456789abcdef', iv: 'fedcba9876543210' };
+  const enc = rt.sandbox.$crypto.aes.encrypt('hello loon', opt);
+  const dec = rt.sandbox.$crypto.aes.decrypt(enc, opt);
+  assert.strictEqual(dec, 'hello loon', 'AES 往返');
+});
+t('$config API 面存在', () => {
+  const { createRuntime } = require('./runtime');
+  const rt = createRuntime({});
+  assert.ok(typeof rt.sandbox.$config.getConfig === 'function');
+  assert.ok(rt.sandbox.$config.getConfig().running_model);
+});
+
 console.log(`\n结果: ${pass} 通过, ${fail} 失败`);
 if (fail) { console.log('\n失败项:'); failures.forEach(f => console.log('  ✗ ' + f)); process.exit(1); }

@@ -286,6 +286,12 @@ function buildArgument(r) {
   return out;
 }
 
+function loadAllowNet() {
+  const i = process.argv.indexOf('--allow-net');
+  if (i < 0 || !process.argv[i + 1]) return null;
+  return process.argv[i + 1].split(',').map(x => x.trim()).filter(Boolean);
+}
+
 function loadMocks() {
   const specs = [];
   for (let i = 0; i < process.argv.length; i++) {
@@ -309,27 +315,43 @@ function loadMocks() {
 // ---------- trigger ----------
 function cmdTrigger() {
   const kind = arg('_', 'cron'); // cron | network-changed | generic
-  const rules = (lpx.scriptRules || []).filter(r => r.trigger === kind);
+  const rules = (lpx.scriptRules || []).filter(r => String(r.trigger || '').split(' ')[0] === kind);
   if (!rules.length) { console.log(`无 ${kind} 触发的脚本规则`); process.exit(3); }
   console.log(`找到 ${rules.length} 条 ${kind} 规则:`);
   let code = 0;
-  for (const r of rules) {
+  let idx = -1;
+  const start = Date.now();
+  const nextRule = () => { idx++; if (idx < rules.length) runRule(rules[idx], idx); };
+  function runRule(r, idx) {
     const sim = resolveSimPath(r.script || r.scriptPath);
     console.log(`\n▸ ${r.cronExpr || kind} → ${path.basename(sim)}`);
-    if (!fs.existsSync(sim)) { console.log('  ❌ 本地找不到脚本'); code = 4; continue; }
+    if (!fs.existsSync(sim)) { console.log('  ❌ 本地找不到脚本'); code = 4; return nextRule(); }
     const rt = createRuntime({
       request: { url: '' }, argument: buildArgument(r),
       scriptName: path.basename(sim), debug: flag('verbose'),
-      httpMocks: loadMocks(), storeFile: arg('persist') || null,
+      httpMocks: loadMocks(),
+          allowNet: loadAllowNet(), storeFile: arg('persist') || null,
       timeout: Number(r.options?.timeout || arg('timeout', 20000)),
     });
     const res = rt.run(sim);
-    (res.logs || []).forEach(l => console.log('  | ' + l));
-    if (!res.ok) { console.log('  ❌ ' + res.error); code = 4; }
-    else if (res.doneCalled && res.done && Object.keys(res.done).length) console.log('  $done → ' + JSON.stringify(res.done).slice(0, 200));
-    else console.log('  ✓ 执行完成');
+    const printResult = () => {
+      (res.logs || []).forEach(l => console.log('  | ' + l));
+      if (!res.ok) { console.log('  ❌ ' + res.error); code = 4; }
+      else if (res.doneCalled && res.done && Object.keys(res.done).length) console.log('  $done → ' + JSON.stringify(res.done).slice(0, 200));
+      else console.log('  ✓ 执行完成');
+    };
+    if (res.ok && !res.doneCalled) {
+      // 异步脚本: 等待最多 timeout (官方语义: $done 前不释放)
+      const wait = setInterval(() => {
+        if (res.doneCalled || Date.now() - start > Number(r.options?.timeout || 30) * 1000) {
+          clearInterval(wait); printResult();
+          if (idx === rules.length - 1) process.exit(code); else nextRule();
+        }
+      }, 100);
+    } else { printResult(); if (idx === rules.length - 1) process.exit(code); else nextRule(); }
+    return;
   }
-  process.exit(code);
+  nextRule(); // 启动 (异步脚本驱动; 完成时 process.exit)
 }
 
 // ---------- run ----------
@@ -391,6 +413,7 @@ function cmdRun() {
           scriptName: path.basename(sim),
           debug: flag('verbose'),
           httpMocks: loadMocks(),
+          allowNet: loadAllowNet(),
           storeFile: arg('persist') || null,
           timeout: Number(arg('timeout', 20000)),
         });

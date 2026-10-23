@@ -25,6 +25,7 @@ const path = require('path');
  */
 function createRuntime(o = {}) {
   const logs = [];
+  const $scriptStartTime = Date.now();
   let done = null;
   let doneCalled = false;
 
@@ -50,19 +51,26 @@ function createRuntime(o = {}) {
     try { store = JSON.parse(fs.readFileSync(storeFile, 'utf8')); } catch { /* 损坏则重置 */ }
   }
   const saveStore = () => { if (storeFile) { try { fs.writeFileSync(storeFile, JSON.stringify(store, null, 1)); } catch { /* 忽略写失败 */ } } };
+  // 官方 script-api: 存储值以字符串形式保存; 省略 Key 用 $script.name; remove() 无参=清空全部
+  const storeKey = (k) => (k === undefined ? (o.scriptName || 'sim') : k);
   const storeApi = {
-    read: (k) => (k in store ? store[k] : null),
-    write: (v, k) => { store[k] = v; saveStore(); return true; },
-    remove: (k) => { delete store[k]; saveStore(); return true; },
+    read: (k) => { const key = storeKey(k); return key in store ? store[key] : null; },
+    write: (v, k) => { store[storeKey(k)] = String(v); saveStore(); return true; },
+    remove: (k) => {
+      if (k === undefined) { for (const key of Object.keys(store)) delete store[key]; }
+      else delete store[k];
+      saveStore(); return true;
+    },
   };
   const prefsApi = {
-    valueForKey: (k) => (k in store ? store[k] : null),
-    setValueForKey: (v, k) => { store[k] = v; saveStore(); return true; },
-    removeValueForKey: (k) => { delete store[k]; saveStore(); return true; },
+    valueForKey: (k) => storeApi.read(k),
+    setValueForKey: (v, k) => storeApi.write(v, k),
+    removeValueForKey: (k) => storeApi.remove(k),
   };
 
   // httpClient mock: { 'url子串或正则': {status, headers, body} } 命中即返回
   const httpMocks = o.httpMocks || null;
+  const allowNet = o.allowNet || null;   // 域名白名单数组, 如 ['api.github.com']
 
   const sandbox = {
     console: {
@@ -83,9 +91,13 @@ function createRuntime(o = {}) {
       'device-model': 'iPhone',
       'system-version': 'iOS 18.0',
       'language': 'zh-Hans',
+      // 官方 script-api: params=参数快照, elapsedMs=运行毫秒
+      params: o.argument && typeof o.argument === 'object' ? { ...o.argument } : {},
+      get elapsedMs() { return Date.now() - ($scriptStartTime || Date.now()); },
+      sandbox: { type: 'plugin' },
     }, o.environment || {}),
     $loon: 'Loon 3.5.1 (983)',
-    $script: { name: o.scriptName || 'sim', startTime: Date.now() / 1000, type: 'response' },
+    $script: { name: o.scriptName || 'sim', startTime: new Date(), type: o.scriptType || 'response' },
     $utils: {
       ungzip: (b) => { try { return zlib.gunzipSync(toBuffer(b)); } catch (e) { try { return zlib.inflateSync(toBuffer(b)); } catch (e2) { return b; } } },
       gzip: (b) => zlib.gzipSync(toBuffer(b)),
@@ -98,11 +110,33 @@ function createRuntime(o = {}) {
       sha256: (b) => crypto.createHash('sha256').update(toBuffer(b)).digest('hex'),
       geohistoricaldata: () => ({}),
     },
+    $crypto: {
+      aes: {
+        encrypt: (data, options) => aesCrypt(true, data, options),
+        decrypt: (data, options) => aesCrypt(false, data, options),
+      },
+    },
+    $dns: {
+      query: (options, cb) => {
+        // Build>=988 API — 模拟实现 (真实 DNS 由 Loon 层做)
+        const host = typeof options === 'string' ? options : (options?.domain || options?.host || '');
+        require('dns').lookup(host || '', (err, addr) => {
+          if (typeof cb === 'function') cb(err ? { error: err.message } : { domain: host, addrs: [addr] });
+        });
+      },
+    },
+    $config: {
+      getConfig: () => ({ all_policy_groups: [], all_nodes: [], running_model: 'filter' }),
+      setSelectPolicy: () => true,
+      getSelectedPolicy: () => null,
+      getSubPolicies: (name, cb) => { if (typeof cb === 'function') cb(null, []); },
+      setRunningModel: () => true,
+    },
     $httpClient: {
-      get: (a, cb) => httpReq('GET', a, cb, logs, httpMocks),
-      post: (a, cb) => httpReq('POST', a, cb, logs, httpMocks),
-      put: (a, cb) => httpReq('PUT', a, cb, logs, httpMocks),
-      delete: (a, cb) => httpReq('DELETE', a, cb, logs, httpMocks),
+      get: (a, cb) => httpReq('GET', a, cb, logs, httpMocks, allowNet),
+      post: (a, cb) => httpReq('POST', a, cb, logs, httpMocks, allowNet),
+      put: (a, cb) => httpReq('PUT', a, cb, logs, httpMocks, allowNet),
+      delete: (a, cb) => httpReq('DELETE', a, cb, logs, httpMocks, allowNet),
     },
     setTimeout,
     setInterval,
@@ -144,14 +178,70 @@ function normalizeDone(v) {
   return out;
 }
 
-function httpReq(method, args, cb, logs, mocks) {
-  const url = typeof args === 'string' ? args : (args?.url || '');
-  logs.push(`[httpClient] ${method} ${url} (${mocks && matchMock(url, mocks) ? 'mocked' : 'simulated, not sent'})`);
-  let resp = { status: 200, headers: {}, body: '' };
-  if (mocks) {
-    const m = matchMock(url, mocks);
-    if (m) resp = { status: m.status ?? 200, headers: m.headers || {}, body: m.body ?? '' };
+// P3-A: httpReq 真连版本 (allowNet 白名单 + mock 优先)
+
+/** $crypto.aes — Node crypto 实现 (options: {key, iv, mode='cbc'} 均为字符串) */
+function aesCrypt(enc, data, options) {
+  const crypto2 = require('crypto');
+  const key = Buffer.from(String(options?.key ?? ''), 'utf8');
+  const iv = Buffer.from(String(options?.iv ?? ''), 'utf8');
+  const algo = 'aes-' + (key.length * 8) + '-' + (options?.mode || 'cbc');
+  if (enc) {
+    const c = crypto2.createCipheriv(algo, key, iv);
+    return Buffer.concat([c.update(toBuffer(data)), c.final()]).toString('base64');
   }
+  const d = crypto2.createDecipheriv(algo, key, iv);
+  return Buffer.concat([d.update(Buffer.from(String(data), 'base64')), d.final()]).toString('utf8');
+}
+
+function httpReq(method, args, cb, logs, mocks, allowNet) {
+  const url = typeof args === 'string' ? args : (args?.url || '');
+  const body = typeof args === 'object' && args?.body !== undefined ? args.body : undefined;
+  const headers = typeof args === 'object' && args?.headers ? args.headers : {};
+
+  const mock = mocks && matchMock(url, mocks);
+  if (mock) {
+    logs.push(`[httpClient] ${method} ${url} (mocked)`);
+    const resp = { status: mock.status ?? 200, headers: mock.headers || {}, body: mock.body ?? '' };
+    if (typeof cb === 'function') setImmediate(() => cb(null, resp, resp.body));
+    return;
+  }
+
+  const host = (() => { try { return new URL(url).hostname; } catch { return ''; } })();
+  const allowed = allowNet && allowNet.some(h => host === h || host.endsWith('.' + h));
+
+  if (allowed) {
+    logs.push(`[httpClient] ${method} ${url} (REAL — 白名单 ${host})`);
+    // 真实请求: Loon 根证书已在系统信任库, 严格 TLS
+    const u = new URL(url);
+    const req = require(u.protocol === 'https:' ? 'https' : 'http').request(
+      { hostname: u.hostname, port: u.port || (u.protocol === 'https:' ? 443 : 80), path: u.pathname + u.search, method,
+        headers, timeout: 15000, rejectUnauthorized: true },
+      (res) => {
+        const chunks = [];
+        res.on('data', c => chunks.push(c));
+        res.on('end', () => {
+          let b = Buffer.concat(chunks);
+          // gzip 自动解压
+          const enc = String(res.headers['content-encoding'] || '');
+          try {
+            if (enc.includes('gzip')) b = require('zlib').gunzipSync(b);
+            else if (enc.includes('deflate')) b = require('zlib').inflateSync(b);
+            else if (enc.includes('br')) b = require('zlib').brotliDecompressSync(b);
+          } catch {}
+          const resp = { status: res.statusCode, headers: res.headers, body: b.toString('utf8') };
+          if (typeof cb === 'function') cb(null, resp, resp.body);
+        });
+      });
+    req.on('timeout', () => { req.destroy(); if (typeof cb === 'function') cb(new Error('timeout'), null, ''); });
+    req.on('error', e => { if (typeof cb === 'function') cb(e, null, ''); });
+    if (body !== undefined) req.write(typeof body === 'string' ? body : JSON.stringify(body));
+    req.end();
+    return;
+  }
+
+  logs.push(`[httpClient] ${method} ${url} (simulated${allowNet ? `, 不在白名单` : ', 未开启 --allow-net'})`);
+  const resp = { status: 200, headers: {}, body: '' };
   if (typeof cb === 'function') setImmediate(() => cb(null, resp, resp.body));
 }
 
