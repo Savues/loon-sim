@@ -2,6 +2,24 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+---
+## [1.2.1] - 2026-10-23
+
+### 修复
+
+- **旧版 cron 规则解析**：支持 `cron "0 9 * * *" script-path=...` 旧版语法（此前 AgentRouter / QuarkCheckIn 等签到类插件的 cron 规则无法解析）
+- **Rewrite 规则响应 `--phase` 参数**：此前 `traceRewriteRules` 硬编码在 `request` 阶段评估，忽略 `--phase response`，导致 Forward 等插件的 response 阶段 header 重写被错误跳过；现改为按 `--phase` 参数评估（request/response）
+- **注释语法修复**：`#` 注释导致 JS 语法错误
+
+### 验证
+
+- 内核自测：49/49 通过
+- 历史回溯：3/3 通过（v3.4.0 / v3.38.0 / v3.9.21）
+- 端到端：Alibaba popcdn `sc{}: 118→0` / cdnId 清零 683 处 · PinDuoDuo 旧语法 $argument 正确注入 5 个 stub
+
+---
+
+
 ---## [1.2.0] - 2026-10-23
 
 ### 新增功能
@@ -46,10 +64,10 @@
 - 端到端：popcdn 350595B->337848B, sc{}: 118->0 键
 - 双形态检测：对象/数组各跑一次，结果不同即报警
 
----
 
 
----
+
+
 
 ## [1.1.1] — 2026-10-23
 
