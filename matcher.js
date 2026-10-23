@@ -51,16 +51,20 @@ function balanced(s) {
 }
 
 function splitAtTop(s, op) {
-  const out = []; let depth = 0, q = null, esc = false, cur = '';
+  // 与 lpx.js splitTopLevel 同语义: 引号/转义/括号/**正则字面量** 感知的多字符切分
+  // (正则内 && / || 不切分 — v1.6.2 审计修复: 此前缺正则感知)
+  const out = []; let depth = 0, q = null, esc = false, re = false, cur = '';
   for (let i = 0; i < s.length; i++) {
     const ch = s[i];
     if (esc) { cur += ch; esc = false; continue; }
     if (ch === '\\') { cur += ch; esc = true; continue; }
     if (q) { cur += ch; if (ch === q) q = null; continue; }
     if (ch === '"' || ch === "'" || ch === '`') { q = ch; cur += ch; continue; }
+    if (ch === '/' && !re && depth === 0 && /[=~\s(]$/.test(cur)) { re = true; cur += ch; continue; }
+    if (re) { cur += ch; if (ch === '/') re = false; continue; }
     if (ch === '(' || ch === '{' || ch === '[') depth++;
     if (ch === ')' || ch === '}' || ch === ']') depth--;
-    if (depth === 0 && s.startsWith(op, i)) { out.push(cur); cur = ''; i += op.length - 1; continue; }
+    if (depth === 0 && !re && s.startsWith(op, i)) { out.push(cur); cur = ''; i += op.length - 1; continue; }
     cur += ch;
   }
   out.push(cur);

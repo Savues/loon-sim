@@ -80,21 +80,26 @@ function execRewrite(state, actionPipe, vars) {
     if (error) { log.push({ name: part, ok: false, error }); continue; }
     const a = args.map(x => evalArg(x, vars));
     const r = apply(state, name, a);
-    const isTerm = r === 'TERMINATED';
+    const isTerm = r === 'TERMINATED' || r === 'MOCKED';
+    const soft = r === 'MOCKED';
     log.push({ name, ok: !r || isTerm, error: isTerm ? null : r });
-    if (isTerm) { terminated = true; break; }
+    if (isTerm && !soft) { terminated = true; break; }
+    if (isTerm && soft) { terminated = true; }  // response.body.mock: 视为响应已定, 但继续执行后续 header action
   }
   return { state, terminated, actions: log };
 }
 
 function apply(state, name, a) {
   try {
-    // --- reject 系: 终止请求 ---
+    // --- reject 系: 终止请求 (官方: 状态码必须是 100...599 范围内的整数) ---
+    const validStatus = (n) => Number.isInteger(n) && n >= 100 && n <= 599;
     if (/^reject$/.test(name)) {
+      if (!validStatus(a[0])) return `状态码 ${a[0]} 越界 (100-599)`;
       state.status = a[0]; if (a.length > 1 && typeof a[1] === 'string') { state.body = a[1]; } else state.body = '';
       state.respHeaders = {}; return 'TERMINATED';
     }
     if (/^reject_(dict|array|img|video)$/.test(name)) {
+      if (!validStatus(a[0])) return `状态码 ${a[0]} 越界 (100-599)`;
       state.status = a[0];
       state.body = name === 'reject_dict' ? '{}' : name === 'reject_array' ? '[]' : name === 'reject_img' ? Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64') : '';
       state.respHeaders = name === 'reject_dict' || name === 'reject_array' ? { 'Content-Type': 'application/json' } : {};
@@ -137,7 +142,7 @@ function apply(state, name, a) {
         state.status = status ?? 200;
         state.respHeaders = { 'Content-Type': MOCK_CT[String(type)] || 'application/octet-stream' };
       }
-      return m[1] === 'response' ? 'TERMINATED' : undefined;
+      return m[1] === 'response' ? 'MOCKED' : undefined;  // MOCKED: 不中断管道 (官方: mock 后仍执行 header action), 但对 Script 视为终止
     }
     return `未知 Action: ${name}`;
   } catch (e) { return e.message; }

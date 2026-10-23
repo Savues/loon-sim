@@ -378,5 +378,33 @@ t('Rewrite 多规则共享 state (前者输出=后者输入)', () => {
   assert.strictEqual((out.match(/← 命中/g) || []).length, 2, '两条都执行');
 });
 
+console.log('⑬ 第二轮语义审计回归 (v1.6.3)');
+t('正则内 && 不被切分', () => {
+  const { evalCondition: ev } = require('./matcher');
+  assert.strictEqual(ev('${url} ~= /a&&b/', {url: 'xa&&bz'}), true);
+});
+t('reject 状态码越界拒绝', () => {
+  const { execRewrite } = require('./rewrite-exec');
+  const st = {url:'u', headers:{}, respHeaders:{}, status:200};
+  const r = execRewrite(st, 'reject_dict(600)', {});
+  assert.strictEqual(r.actions[0].ok, false, '600 应报错');
+  const st2 = {url:'u', headers:{}, respHeaders:{}, status:200};
+  assert.strictEqual(execRewrite(st2, 'reject_dict(200)', {}).terminated, true);
+});
+t('mock 后 header action 继续执行', () => {
+  const { execRewrite } = require('./rewrite-exec');
+  const st = {url:'u', headers:{}, respHeaders:{}, status:200};
+  const r = execRewrite(st, 'response.body.mock("json", `{}`, 200) | response.header.set("X", "1")', {});
+  assert.strictEqual(st.respHeaders['X'], '1');
+  assert.strictEqual(r.terminated, true, '对 Script 层仍是终止');
+});
+t('check: timeout=0 检出 / timeout={n} 合法', () => {
+  const fs = require('fs');
+  const { execSync } = require('child_process');
+  fs.writeFileSync('/tmp/st_t1.lpx', '#!name=T\n#!version=1\n[Script]\nrequest if ${url} ~= /a/ then script("a.js") with timeout=0\n');
+  let out = ''; try { out = execSync('node cli.js check /tmp/st_t1.lpx', {encoding:'utf8'}); } catch(e) { out = e.stdout || ''; }
+  assert.ok(out.includes('timeout=0 非法'), '应检出');
+});
+
 console.log(`\n结果: ${pass} 通过, ${fail} 失败`);
 if (fail) { console.log('\n失败项:'); failures.forEach(f => console.log('  ✗ ' + f)); process.exit(1); }

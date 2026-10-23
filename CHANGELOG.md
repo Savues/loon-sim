@@ -3,6 +3,28 @@
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ---
+## [1.6.3] - 2026-10-24
+
+### ★ 第二轮语义审计 — 4 处偏差修复
+
+| # | 偏差 | 修复 |
+|---|------|------|
+| 6 | **matcher.js 自带的 splitAtTop 缺正则感知**（v1.3.1 只修了 lpx.js 那份，双实现漂移）→ 正则内 `&&`/`\|\|` 被错误切分 | 与 splitTopLevel 同语义（引号/转义/括号/正则字面量感知）|
+| 7 | reject 状态码不校验范围（600 也静默接受）| 100-599 整数校验（官方明确）|
+| 8 | `response.body.mock` 命中即中断管道 → 后续 header.set 不执行 | 官方「先 mock 后按序执行全部 Header」→ MOCKED 软终止（继续 header，对 Script 层仍终止）|
+| 9 | check 漏检：`timeout=0`/负数 · 脚本路径空串/变量 · `tag=${n}` 模板 | 全部补齐（官方均为"规则无效"级）；`timeout={number参数}` 合法不误报 |
+
+### 第二轮确认无误
+
+条件优先级（比较>\&\&>\|\|）/ 括号分组 / 嵌套括号 / header 双/单引号语法 / json.replace 数值类型 / 嵌套路径自动创建 / reject(200,"{}") 无 CT / header.replace $n / store 三方法返回值 / 双 $done 容忍 / 顶层 return / URL Guard / 动态 timeout
+
+### 教训：双实现漂移
+
+splitTopLevel（lpx.js）与 splitAtTop（matcher.js）是历史双实现 —— v1.3.1 修复只落了一份。
+**根因是复制粘贴的第二份实现没被纳入修复范围。** selftest 已加锁定。
+
+selftest 69 → 73 · CI 全绿
+
 ## [1.6.2] - 2026-10-24
 
 ### ★★ 全面语义审计 — 5 处与官方文档的偏差修复

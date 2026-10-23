@@ -193,6 +193,35 @@ function cmdCheck() {
     }
   }
 
+  // with timeout 必须为正有限数 (官方: 大于 0 的有限 Number)
+  for (const r of p.scriptRules) {
+    if (r.legacy) continue;
+    for (const m of String(r.raw || '').matchAll(/timeout\s*=\s*(?!\$\{|\{)([^,\s]+)/g)) {
+      const n = Number(m[1]);
+      if (!Number.isFinite(n) || n <= 0) { console.log(`❌ [Script] with timeout=${m[1]} 非法（官方: 大于 0 的有限数值）`); errs++; }
+    }
+  }
+  // script() 路径必须非空固定字符串 (官方: 不能用变量/模板)
+  for (const r of p.scriptRules) {
+    if (r.legacy) continue;
+    const pm = /script\(\s*([^,)]+?)\s*[,)]/.exec(String(r.raw || ''));
+    if (pm) {
+      const pathArg = pm[1].trim();
+      if (/^\$\{/.test(pathArg)) { console.log(`❌ [Script] 脚本路径不能用变量: ${pathArg}`); errs++; }
+      else if (pathArg === '""' || pathArg === "''" || pathArg === '``') { console.log(`❌ [Script] 脚本路径为空字符串`); errs++; }
+    } else if (!/script\(/.test(String(r.raw || '')) && r.scriptPath === undefined && r.invalid) {
+      // 无 script( 且无 scriptPath → 已由 invalid 报
+    }
+  }
+  // tag/img_url/requires_body/binary_body_mode 不接受变量或模板 (官方)
+  for (const r of p.scriptRules) {
+    if (r.legacy) continue;
+    for (const f of ['tag', 'img_url', 'requires_body', 'binary_body_mode']) {
+      const re = new RegExp(f + '\\s*=\\s*\\$\\{');
+      if (re.test(String(r.raw || ''))) { console.log(`❌ [Script] with ${f}= 不接受变量（官方: 固定值）`); errs++; }
+    }
+  }
+
   // 插件对象参数约束: {${a},${b}} 不能空/重复/未声明 (官方: 违反→当前规则无效)
   for (const r of p.scriptRules) {
     if (r.invalid) continue; // 解析失败的规则已由上面报过, 不重复
