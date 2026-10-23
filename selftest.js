@@ -406,5 +406,22 @@ t('check: timeout=0 检出 / timeout={n} 合法', () => {
   assert.ok(out.includes('timeout=0 非法'), '应检出');
 });
 
+console.log('⑭ 第三轮审计回归 (v1.6.4)');
+t('$httpClient.head 方法存在且回调', () => {
+  const fs = require('fs');
+  fs.writeFileSync('/tmp/st_h.js', '$httpClient.head({url:"https://m.com/h"},(e,r)=>{console.log("H="+r.status);$done({});});');
+  const { createRuntime } = require('./runtime');
+  const rt = createRuntime({httpMocks: {'m.com': {status: 204, body: ''}}});
+  const res = rt.run('/tmp/st_h.js');
+  assert.ok(res.logs.join('').includes('[httpClient] HEAD'), 'head 应被处理: ' + res.logs.join('|'));
+});
+t('header.add 批量数组参数 (官方转换器产物形态)', () => {
+  const { execRewrite } = require('./rewrite-exec');
+  const st = {url:'u', headers:{}, respHeaders:{}, status:200};
+  execRewrite(st, 'request.header.add(["A", "B"], ["1", "2"])', {});
+  assert.strictEqual(st.headers['A'], '1');
+  assert.strictEqual(st.headers['B'], '2');
+});
+
 console.log(`\n结果: ${pass} 通过, ${fail} 失败`);
 if (fail) { console.log('\n失败项:'); failures.forEach(f => console.log('  ✗ ' + f)); process.exit(1); }

@@ -3,6 +3,25 @@
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ---
+## [1.6.4] - 2026-10-24
+
+### ★ 第三轮审计（runtime / 转换器往返 / HAR）— 2 处修复
+
+| # | 问题 | 修复 |
+|---|------|------|
+| 10 | `$httpClient` 缺 `head` 方法（官方 §7.1），且未知方法静默无回调 | 补 head/options；全部方法走统一 httpReq |
+| 11 | **Rewrite 批量数组参数不支持**（`header.add(["A","B"],["1","2"])` 被当成单个 header 名）| evalArg 支持数组字面量；add/set/del 批量展开 —— 这是官方转换器的**标准产物形态**，不支持会导致"转换成功但执行错误" |
+
+### 本轮确认无误
+
+httpClient 回调签名/headers/body · mock 优先级 · $environment.params 快照 · $loon 版本 · console.warn/error 捕获 · **沙箱隔离（require/process 均 undefined）** · HAR base64 解码 / 空内容 / 302 无 body · **全仓库 30 插件「官方转换→模拟器解析」往返回归 0 失败**
+
+### 方法论沉淀
+
+用官方转换器批量转换全仓库插件再做 parse，等于免费的 fuzzer —— 产物解析失败即模拟器解析器覆盖缺口。
+
+selftest 73 → 75 · CI 全绿
+
 ## [1.6.3] - 2026-10-24
 
 ### ★ 第二轮语义审计 — 4 处偏差修复

@@ -136,7 +136,10 @@ function createRuntime(o = {}) {
       get: (a, cb) => httpReq('GET', a, cb, logs, httpMocks, allowNet),
       post: (a, cb) => httpReq('POST', a, cb, logs, httpMocks, allowNet),
       put: (a, cb) => httpReq('PUT', a, cb, logs, httpMocks, allowNet),
+      head: (a, cb) => httpReq('HEAD', a, cb, logs, httpMocks, allowNet),
       delete: (a, cb) => httpReq('DELETE', a, cb, logs, httpMocks, allowNet),
+      // 兜底: 未定义方法也走 httpReq (官方支持 options/p TRACE 等冷门方法; 与其静默无回调, 不如统一处理)
+      options: (a, cb) => httpReq('OPTIONS', a, cb, logs, httpMocks, allowNet),
     },
     setTimeout,
     setInterval,

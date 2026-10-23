@@ -48,6 +48,22 @@ function evalArg(raw, vars) {
   if (t === 'false') return false;
   if (t === 'null') return null;
   if (/^-?\d+(\.\d+)?$/.test(t)) return Number(t);
+  // 数组字面量 (官方批量语法: header.add(["A","B"], ["1","2"]))
+  if (/^\[.*\]$/s.test(t)) {
+    const items = [];
+    let cur2 = '', q2 = null, d2 = 0;
+    for (let i = 1; i < t.length - 1; i++) {
+      const ch = t[i];
+      if (q2) { cur2 += ch; if (ch === q2) q2 = null; continue; }
+      if (ch === '"' || ch === "'" || ch === '`') { q2 = ch; cur2 += ch; continue; }
+      if (ch === '[' || ch === '(') d2++;
+      if (ch === ']' || ch === ')') d2--;
+      if (ch === ',' && d2 === 0) { items.push(cur2.trim()); cur2 = ''; continue; }
+      cur2 += ch;
+    }
+    if (cur2.trim()) items.push(cur2.trim());
+    return items.map(x => evalArg(x, vars));
+  }
   return t;                                                            // 裸串容忍
 }
 
@@ -118,6 +134,7 @@ function apply(state, name, a) {
         const re = a[1], rep = String(a[2]).replace(/\$0/g, '$&');
         H[String(a[0])] = String(H[String(a[0])] ?? '').replace(re, rep); return;
       }
+      if (Array.isArray(a[0])) { for (let i = 0; i < a[0].length; i++) H[String(a[0][i])] = String((Array.isArray(a[1]) ? a[1][i] : a[1]) ?? ''); return; }
       H[String(a[0])] = String(a[1]); return;  // add/set 同效
     }
     // --- body.replace ---
