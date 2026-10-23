@@ -145,13 +145,48 @@ $utils（gzip/ungzip/base64/md5/sha1/sha256）/ $crypto.aes（真实加解密）
 
 ## 可靠性验证
 
-模拟器自身的正确性由三层保障：
+模拟器自身的正确性由**六重防线**保障（v1.6.4）：
 
-### 1. 内核自测（46 项）
+### ① 内核自测（75 项）
 ```bash
-node selftest.js        # → 46 通过, 0 失败
+node selftest.js        # → 75 通过, 0 失败
 ```
-覆盖：`[Argument]` 解析 / 新旧 Script 语法 / 条件求值（含括号优先级）/ `$argument` 三态 / `[Rule]` 匹配 / `[Mitm]` / 运行时 / 段切分。
+覆盖：`[Argument]` 解析 / 新旧 Script 语法 / 条件求值（优先级·括号·正则内 `&&`/`||`·严格类型 `==`）/ `$argument` 三态 / `[Rule]` 匹配（含 DOMAIN-WILDCARD）/ 运行时（httpClient mock/白名单/$crypto/store 持久化）/ 官方转换器回归 / 三轮语义审计用例。
+
+### ② 三轮语义审计（对照官方文档存档，累计修复 11 处偏差）
+
+| 轮次 | 修复 |
+|------|------|
+| v1.6.2 | `==` 严格类型 · Script 条件传插件参数 · Rewrite 共享 state · check 漏检 · 裸正则被 relevance 隐藏 |
+| v1.6.3 | matcher 正则感知（双实现漂移）· reject 状态码范围 · mock 软终止 · check 再漏检 3 项 |
+| v1.6.4 | `$httpClient.head` · Rewrite 批量数组参数（官方转换器产物形态）|
+
+### ③ 官方转换器一致性（parity）
+```bash
+node convert-parity.js <plugin.lpx>   # 官方转换后新旧解析决策必须等价
+```
+全仓库 **38/38 通过**。另附「官方转换→模拟器解析」批量往返（30 插件 0 失败）—— 官方转换器当 fuzzer 用。
+
+### ④ 仓库插件批量可靠性实测
+```bash
+node reliability-test.js    # 从插件真实规则自动提取 URL 全量决策追踪
+```
+38 插件 × 60 规则 URL：**0 崩溃 · 0 JS 错误**，规则全部可正确命中。
+
+### ⑤ 规则判定 vs 终端实测（基准真值）
+终端经 Loon MITM，可直接判断某域名是否被拦（`getent hosts` → `127.0.0.1` 或 `curl` → `000`）。
+```bash
+node verify-rules.js <plugin> --from-rule
+# → AntiRevoke 17/17 一致 · Alibaba-AdBlock 16/16 一致
+```
+
+### ⑥ 端到端回归（真实抓包数据）+ 历史回溯
+```bash
+node cli.js run <plugin> --url <URL> --response-file <真实响应>
+sh regression-history.sh   # 历史 3 个事故版本全部检出
+```
+
+一键全跑：`sh ci.sh`（自测 → 回溯 → 全量插件 check → parity）。
 
 ### 2. 规则判定 vs 终端实测（基准真值）
 终端经 Loon MITM，可直接判断某域名是否被拦（`getent hosts` → `127.0.0.1` 或 `curl` → `000`）。
