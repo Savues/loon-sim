@@ -38,26 +38,59 @@ function parseArguments(lines) {
     const key = line.slice(0, eq).trim();
     const rest = line.slice(eq + 1);
     const parts = splitTopLevel(rest, ',');
-    const kind = (parts[0] || '').trim();
+    // 确保 parts 至少有基本元素
+    const kind = (parts[0] || '').trim().toLowerCase();
     let def = (parts[1] || '').trim();
     let type = null;
+    let tag = '';
     for (const p of parts.slice(2)) {
       const t = p.trim();
       const m = /^type\s*=\s*(\w+)/i.exec(t);
       if (m) type = m[1].toLowerCase();
+      const tm = /^tag\s*=\s*(.+)$/i.exec(t);
+      if (tm) tag = tm[1];
     }
     // 去引号
     if (/^".*"$/.test(def) || /^'.*'$/.test(def)) def = def.slice(1, -1);
     let value;
+    let kindNorm = kind;
+    // 处理三态 switch: true / false / 空(默认false)
     if (kind === 'switch') {
-      value = String(def).toLowerCase() === 'true';
+      if (def === '' || def.toLowerCase() === 'false') {
+        value = false;
+      } else {
+        value = String(def).toLowerCase() === 'true';
+      }
       type = type || 'boolean';
+    } else if (kind === 'select') {
+      // select: 多选项，取首个作为默认值
+      const options = def.split(',').map(s => s.trim());
+      value = options[0] || '';
+      // 如果显式指定了 type（如 type=number），按该类型转换默认值
+      if (type === 'number') {
+        value = options[0] === '' ? null : Number(options[0]);
+      } else if (type === 'boolean') {
+        value = options[0] === 'true';
+      } else {
+        value = options[0] || '';
+      }
+      // type 已由外部显式指定，或默认为 string
+      type = type || 'string';
     } else if (type === 'number') {
       value = def === '' ? null : Number(def);
-    } else {
+    } else if (kind === 'input') {
       value = def;
+      type = type || 'string';
+    } else if (kind === 'object') {
+      // 对象参数，保留类型信息
+      value = def;
+      type = type || 'object';
+    } else {
+      // 未知 kind，按 input 处理
+      value = def;
+      type = type || 'string';
     }
-    args[key] = { kind, type: type || 'string', default: value, raw: line };
+    args[key] = { kind, type: type || 'string', default: value, tag, raw: line };
   }
   return args;
 }
@@ -94,10 +127,19 @@ function parseArgKeys(raw) {
     if (ch === '}') { depth--; if (depth === 0) { out.push(cur); cur = ''; } continue; }
     if (depth > 0) cur += ch;
   }
-  // {a,b,c} 单括号多 key / 或已分离的多个片段
+  // 同时支持 {a,b} 单括号多key 和 [{a},{b}] 多个{}块
   const keys = [];
-  for (const seg of out) for (const k of seg.split(',')) keys.push(k);
-  if (!out.length && t.trim()) { /* 无花括号：直接当 key */ for (const k of t.split(',')) keys.push(k); }
+  for (const seg of out) {
+    // 先按 } 分割，再按 , 分割
+    const parts = seg.split('}');
+    for (const part of parts) {
+      for (const k of part.split(',')) {
+        const key = k.replace(/^\s*\{?\s*\$?\{?/, '').replace(/\}?\s*$/, '').trim();
+        if (key) keys.push(key);
+      }
+    }
+  }
+  if (!out.length && t.trim()) { /* 无花括号：直接当 key */ for (const k of t.split(',')) keys.push(k.trim()); }
   return keys.map(k => String(k).replace(/^\s*\$?\{?/, '').replace(/\}?\s*$/, '').trim()).filter(Boolean);
 }
 
@@ -126,11 +168,11 @@ function parseScriptRules(lines) {
         const cond = `\${url} ~= /${rx}/i`;
         const rest = lm[3];
         const kv = {};
-        // 按逗号切分（跳过 argument={...} 里的逗号）
+        // 按逗号切分（跳过 argument=[{...}] 里的逗号；{} 和 [] 都算括号）
         let depth = 0, cur = '';
         for (const ch of rest) {
-          if (ch === '{') depth++;
-          if (ch === '}') depth--;
+          if (ch === '{' || ch === '[') depth++;
+          if (ch === '}' || ch === ']') depth--;
           if (ch === ',' && depth === 0) { if (cur.trim()) pushKV(kv, cur.trim()); cur = ''; }
           else cur += ch;
         }

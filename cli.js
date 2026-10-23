@@ -49,6 +49,42 @@ function cmdCheck() {
   const knownHeader = new Set(['name', 'desc', 'author', 'homepage', 'icon', 'system', 'system_version', 'loon_version', 'date', 'tag', 'type', 'version']);
   for (const k of Object.keys(p.header)) if (!knownHeader.has(k)) console.log(`⚠️  未知 #! 字段: #!${k}`);
 
+  // 1b) [Argument] 定义合法性 (A1~A6)
+  for (const w of (p.argWarnings || [])) { console.log(`⚠️ ${w.msg}`); warns++; }
+
+  // 1c) 引用一致性 (B组) + 死参数 (B4/B5)
+  const allScriptCode = [];   // 收集所有脚本文本(无法取到远端脚本, 只做静态标注)
+  const definedKeys = Object.keys(p.args);
+  const usedInRules = new Set();
+  const usedInEnable = new Set();
+  for (const r of p.scriptRules) {
+    for (const k of (r.argumentKeys || [])) usedInRules.add(k);
+    // 旧语法: enable={k} 在 options.enable 或 raw 中
+    let en = r.options && r.options.enable;
+    if (en) { const m = /^\{?([a-zA-Z][a-zA-Z0-9]*)\}?$/.exec(String(en).trim().replace(/^\$\{/,'').replace(/\}$/,'')); if (m) usedInEnable.add(m[1]); }
+    else if (r.raw) { const m = /enable=\{?(\$\{)?([a-zA-Z][a-zA-Z0-9]*)\}(\})?/.exec(r.raw); if (m) usedInEnable.add(m[2]); }
+  }
+  for (const r of p.rewriteRules) {
+    if (r.action && r.action.includes('enable')) {
+      const m = /enable=\$\{([a-zA-Z]+)\}/.exec(r.action);
+      if (m) { if (!definedKeys.includes(m[1])) console.log(`❌ [Rewrite] 引用未声明参数 \${${m[1]}}`), errs++; else usedInRules.add(m[1]); }
+      const m2 = /\$\{([a-zA-Z]+)}\s*==\s*true/.exec(r.condition || '');
+      if (m2) { if (!definedKeys.includes(m2[1])) console.log(`❌ [Rewrite] 条件引用未声明参数 \${${m2[1]}}`), errs++; else usedInRules.add(m2[1]); }
+    }
+  }
+  for (const r of p.rules) {
+    if (r.extra) for (const e of r.extra) {
+      const m = /^enable=\$\{([a-zA-Z]+)\}/.exec(e);
+      if (m) { if (!definedKeys.includes(m[1])) console.log(`❌ [Rule] 引用未声明参数 \${${m[1]}}`), errs++; else usedInRules.add(m[1]); }
+    }
+  }
+  for (const k of definedKeys) {
+    if (!usedInRules.has(k) && !usedInEnable.has(k)) console.log(`⚠️ [Argument] "${k}" 未被任何规则引用(死参数)`), warns++;
+  }
+  // 1d) C1: 脚本 isEnabled 读取的 key 未声明为 switch
+  //   (仅能静态提示; 无法取远端脚本则跳过)
+  //   注: 若规则引用了参数但脚本未读取, 属"死传参", 同样只能靠运行双形态发现
+
   // 2) [Rule] 是否误挂开关（官方 Rule 无 enable 字段）
   for (const r of p.rules) {
     for (const e of r.extra) if (/^enable=/i.test(e)) { console.log(`❌ [Rule] 含 enable= （该段无此字段 → 死开关）: ${r.raw.slice(0, 70)}`); errs++; }
