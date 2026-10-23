@@ -27,11 +27,12 @@ const lpxPath = process.argv[3];
 if (!cmd || !lpxPath) {
   console.log(`用法:
   node cli.js check   <plugin.lpx>
-  node cli.js convert <plugin.lpx> [-o out.lpx]  # 旧→新语法转换 (官方实现)\n  node cli.js run     <plugin.lpx> --url URL [--response-file F] [--status 200] [--phase response] [--arg k=v]
+  node cli.js init    <name> [dir]                # 生成插件骨架\n  node cli.js convert <plugin.lpx> [-o out.lpx]  # 旧→新语法转换 (官方实现)\n  node cli.js run     <plugin.lpx> --url URL [--response-file F] [--status 200] [--phase response] [--arg k=v]
   node cli.js har     <plugin.lpx> <file.har> [--limit N] [--only substr]
   node cli.js rules   <plugin.lpx> [--url URL]`);
   process.exit(1);
 }
+if (cmd === 'init') { require('./init'); process.exit(0); }
 const lpx = parseLpx(lpxPath);
 
 // ---------- check ----------
@@ -428,6 +429,9 @@ function cmdRun() {
           done = { summary: body ? `body ${body.length}B → ${outStr.length}B` : `${outStr.length}B`, fields };
         }
         done.preview = outStr.slice(0, 200);
+        if (flag('diff-full') && body) {
+          done.fullDiff = fullDiff(body, outStr);
+        }
       }
     }
   }
@@ -441,6 +445,10 @@ function cmdRun() {
   console.log(out);
   if (hr) console.log(`  ${'[Rule] 命中: ' + hr.raw}`);
   if (done && done.preview) console.log('  ' + '前 200 字符: ' + done.preview);
+  if (done && done.fullDiff && done.fullDiff.length) {
+    console.log('  ▸ 完整 diff (--diff-full)');
+    for (const l of done.fullDiff) console.log('    ' + l);
+  }
   console.log('');
   // 退出码: 0=命中且成功 / 3=无规则命中 / 4=脚本异常
   if (eff && done && done.error) process.exit(4);
@@ -465,6 +473,8 @@ function resolveSimPath(scriptPath) {
 
 // ---------- har ----------
 function cmdHar() {
+  let reportLines = flag('report') ? [] : null;
+  const reportPath = arg('report');
   const harPath = process.argv[4];
   if (!harPath) { console.error('需要 HAR 路径'); process.exit(1); }
   const har = JSON.parse(fs.readFileSync(harPath, 'utf8'));
@@ -495,8 +505,20 @@ function cmdHar() {
     if (isChanged || showAll) {
       console.log(`  ${isChanged ? '✏️ ' : '  '} ${String(before.length).padStart(8)}B → ${String(out ? out.length : 0).padStart(8)}B  ${url.split('/gw/')[1]?.split('?')[0] || url.slice(0, 70)}`);
     }
+    if (reportLines) reportLines.push({ url, before: before.length, after: out ? out.length : before.length, changed: isChanged, matched: true, script: m.scriptRule.scriptPath.split('/').pop() });
   }
   console.log(`\n扫描 ${n} 条请求: 命中 Script ${matched} · 实际改动 ${changed} · 被 Rewrite 终止 ${blocked}`);
+  if (reportLines) {
+    const md = ['# loon-sim HAR 回放报表', '',
+      `插件: ${lpxPath} · 扫描 ${n} · 命中 ${matched} · 改动 ${changed} · 终止 ${blocked} · ${new Date().toISOString()}`, '',
+      '| 接口 | 脚本 | 大小变化 | 改动 |', '|------|------|---------|------|'];
+    for (const r of reportLines) {
+      const api = r.url.split('/gw/')[1]?.split('?')[0] || r.url.slice(0, 60);
+      md.push(`| ${api} | ${r.script} | ${r.before}B → ${r.after}B | ${r.changed ? '✏️' : '—'} |`);
+    }
+    fs.writeFileSync(reportPath, md.join('\n'));
+    console.log(`✅ 报表已写出: ${reportPath}`);
+  }
 }
 
 // ---------- rules ----------
@@ -521,10 +543,37 @@ function cmdRules() {
   console.log(`\n[Rule] ${lpx.rules.length} 条 · [Script] ${lpx.scriptRules.length} 条 · [Rewrite] ${lpx.rewriteRules.length} 条 · [Mitm] ${lpx.mitm.length}`);
 }
 
+
+/** --diff-full: 结构化 before/after 树状 diff (顶层 + 一层对象) */
+function fullDiff(before, after) {
+  let a, b;
+  try { a = JSON.parse(before); b = JSON.parse(after); } catch { return null; }
+  const lines = [];
+  const keys = [...new Set([...Object.keys(a || {}), ...Object.keys(b || {})])];
+  for (const k of keys) {
+    const va = a?.[k], vb = b?.[k];
+    const sa = JSON.stringify(va), sb = JSON.stringify(vb);
+    if (sa === sb) continue;
+    if (va && vb && typeof va === 'object' && typeof vb === 'object' && !Array.isArray(va) && !Array.isArray(vb)) {
+      lines.push(`◈ ${k}:`);
+      const sub = [...new Set([...Object.keys(va), ...Object.keys(vb)])];
+      for (const sk of sub) {
+        const ssa = JSON.stringify(va[sk]), ssb = JSON.stringify(vb[sk]);
+        if (ssa !== ssb) lines.push(`   ${sk}: ${shortVal(ssa)} → ${shortVal(ssb)}`);
+      }
+    } else {
+      lines.push(`◇ ${k}: ${shortVal(sa)} → ${shortVal(sb)}`);
+    }
+  }
+  return lines;
+}
+function shortVal(v) { v = String(v); return v.length > 60 ? v.slice(0, 57) + '…' : v; }
+
 if (cmd === 'check') { const e = cmdCheck(); process.exit(e ? 2 : 0); }
 else if (cmd === 'trigger') cmdTrigger();
 else if (cmd === 'run' || cmd === 'trace') cmdRun();
 else if (cmd === 'har') cmdHar();
 else if (cmd === 'rules') cmdRules();
 else if (cmd === 'convert') { require('./convert'); }
+else if (cmd === 'init') { require('./init'); }
 else { console.error('未知命令: ' + cmd); process.exit(1); }

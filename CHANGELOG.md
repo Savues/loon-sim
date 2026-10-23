@@ -3,6 +3,25 @@
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ---
+## [1.5.0] - 2026-10-24
+
+### P1: 语法覆盖补全（对照官方文档存档）
+
+- **★ Rewrite v2 Action 执行器**（`rewrite-exec.js`）：reject 系 / redirect / url.replace / header add·set·del·replace（$0-$n 捕获）/ body.replace / json add·delete·replace / body.mock（16 种内容类型）。Action 管道从左到右、单个失败跳过继续（官方语义）。trace 的 Rewrite 命中行现在展示**真实改写效果**
+- **`as` 命名捕获求值**：`~= /re/ as item` 命中后 `${item.0..n}` 写入变量，供 Action 引用（官方 rewrite-v2 语义）
+- **DOMAIN-WILDCARD 规则类型**（1008+）：Glob 通配 `*`(跨点) `?`(恰一字符) `[...]`/`[!...]`，大小写不敏感
+- 条件变量增强：`as` 捕获 + 已有 `${response.status}` / `${request.header['x']}` 求值
+
+### P2: 体验与生态
+
+- **`init` 脚手架**：`node cli.js init <name> [dir]` 生成 lpx + src 脚本 + README（生成物开箱 check 0 错误）
+- **`har --report out.md`**：Markdown 回放报表（接口×脚本×大小变化×改动汇总）
+- **`--diff-full`**：结构化 before/after 树状 diff（顶层+一层对象值级对比）
+- **`ci.sh`**：全套 CI（自测 56 → 回溯 3 → 全量 check（已知问题白名单区分新问题）→ parity 38），退出码 0/2/3 可接自动化
+
+### 验证
+- CI 全绿：自测 56/56 · 回溯 3/3 · check 新问题 0 · parity 38/38
+
 ## [1.4.1] - 2026-10-24
 
 ### P0 收口：官方转换器审计问题的自动化兜底

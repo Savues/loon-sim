@@ -34,16 +34,27 @@ function traceRewriteRules(lpx, url, phase, argValues) {
     rec.relevant = isRelevant(r.condition, url);
     // 阶段不符
     if (r.phase !== phase) { rec.result = 'skip'; rec.reason = `阶段不符（规则=${r.phase}，当前=${phase}）`; out.push(rec); continue; }
-    // 条件求值
-    const v = evalCondSafe(r.condition, { url });
+    // 条件求值 (as 捕获写入 vars)
+    const vars = { url };
+    const v = evalCondSafe(r.condition, vars);
     if (v === true) { rec.result = 'match'; }
     else { rec.result = 'no'; rec.reason = '条件不成立'; }
+    // 真实执行 Action (rewrite-exec): 同阶段所有命中的规则都执行 (官方语义)
+    if (v === true && r.action) {
+      try {
+        const { execRewrite } = require('./rewrite-exec');
+        const st = r.sharedState || (r.sharedState = { url, headers: {}, respHeaders: {}, status: 200, body: null });
+        const exec = execRewrite(st, r.action, vars);
+        rec.exec = exec.actions.map(a => ({ name: a.name, ok: a.ok, error: a.error }));
+        rec.terminated = exec.terminated;
+      } catch (e) { rec.exec = [{ name: r.action, ok: false, error: e.message }]; }
+    }
     // 动作类型
-    rec.terminating = /reject/i.test(r.action || '');
+    rec.terminating = /reject|redirect|mock/i.test(r.action || '') || rec.terminated;
     out.push(rec);
     if (v === true && rec.terminating) {
       rec.note = '★ 终止类动作 → 不发起请求；Request/Response Script 均不执行';
-      break; // 官方语义：第一条命中即终止
+      break;
     }
   }
   return out;

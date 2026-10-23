@@ -21,13 +21,16 @@ function evalCondition(cond, vars) {
     if (balanced(inner)) return evalCondition(inner, vars);
   }
 
-  // A ~= /re/flags
-  let m = /^(.*?)\s*~=\s*(\/.+?\/[a-z]*)\s*$/is.exec(s);
+  // A ~= /re/flags [as name] — 命中后捕获组写入 vars (官方: ${name.0}/\${name.n})
+  let m = /^(.*?)\s*~=\s*(\/.+?\/[a-z]*)(?:\s+as\s+(\w+))?\s*$/is.exec(s);
   if (m) {
     const left = resolveValue(m[1].trim(), vars);
     const re = parseRegex(m[2].trim());
     if (left == null || !re) return false;
-    return re.test(String(left));
+    const hit = re.exec(String(left));
+    if (!hit) return false;
+    if (m[3]) { for (let i = 0; i < hit.length; i++) vars[m[3] + '.' + i] = hit[i]; }
+    return true;
   }
   // A == B
   m = /^(.*?)\s*==\s*(.*)$/s.exec(s);
@@ -179,7 +182,28 @@ function matchRequest(lpx, ctx) {
   return { scriptRule, argument, blocked: terminal, notes };
 }
 
-/** [Rule] 域名匹配（简化：DOMAIN / DOMAIN-SUFFIX / DOMAIN-KEYWORD） */
+/** Glob 通配匹配 (官方 domain_rule: * 跨点, ? 恰一字符, [...] 集合, 大小写不敏感) */
+function wildcardMatch(pat, host) {
+  const p = pat.toLowerCase(), h = host.toLowerCase();
+  // 转成正则: * → [^.]* 不对 — 官方 * 可跨点 → .* ; ? → . ; [...] 保留
+  let rx = '';
+  for (let i = 0; i < p.length; i++) {
+    const c = p[i];
+    if (c === '*') rx += '.*';
+    else if (c === '?') rx += '.';
+    else if (c === '[') {
+      const end = p.indexOf(']', i);
+      if (end < 0) { rx += '\\['; continue; }
+      let cls = p.slice(i + 1, end).replace(/[!^]/, '^');
+      rx += '[' + cls + ']';
+      i = end;
+    }
+    else rx += c.replace(/[.+^${}()|\\]/g, '\\$&');
+  }
+  return new RegExp('^' + rx + '$').test(h);
+}
+
+/** [Rule] 域名匹配（DOMAIN / DOMAIN-SUFFIX / DOMAIN-KEYWORD / DOMAIN-WILDCARD） */
 function matchRule(lpx, url) {
   let host = '';
   try { host = new URL(url).hostname.toLowerCase(); } catch { return null; }
@@ -189,8 +213,9 @@ function matchRule(lpx, url) {
     if (r.type === 'DOMAIN' && host === v) return r;
     if (r.type === 'DOMAIN-SUFFIX' && (host === v || host.endsWith('.' + v))) return r;
     if (r.type === 'DOMAIN-KEYWORD' && host.includes(v)) return r;
+    if (r.type === 'DOMAIN-WILDCARD' && wildcardMatch(v, host)) return r;
   }
   return null;
 }
 
-module.exports = { evalCondition, balanced, matchRequest, matchRule, buildArgument, parseRegex, extractGuardRegex, splitAtTop };
+module.exports = { wildcardMatch, evalCondition, balanced, matchRequest, matchRule, buildArgument, parseRegex, extractGuardRegex, splitAtTop };

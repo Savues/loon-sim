@@ -30,6 +30,7 @@ function renderTrace({ url, phase, status, argValues, rewrite, script, mitm, don
       if (r.result === 'no') line = `  ${sym} ${c(C.d, shortAction(r.action) + '   (' + r.reason + ')')}`;
       if (r.result === 'skip') line = `  ${sym} ${c(C.d, shortAction(r.action) + '   (' + r.reason + ')')}`;
       L.push(line);
+      if (r.exec) for (const e of r.exec) L.push(`      ${e.ok ? c(C.g, '✓') : c(C.r, '✗')} action ${e.name}${e.error ? c(C.r, ' — ' + e.error) : ''}`);
       if (r.note) L.push(`      ${c(C.r, r.note)}`);
     }
   }
