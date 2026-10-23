@@ -2,6 +2,53 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+---## [1.2.0] - 2026-10-23
+
+### 新增功能
+
+- **select + type=number 支持**：`select` 类型参数现在支持 `type=number`，首个选项正确转换为 Number 类型
+- **select + type=boolean 支持**：首个选项正确转换为 Boolean 类型
+- **Argument 解析全面增强**：完整支持 Loon 官方 Argument 语法
+  - `switch` 三态（true/false/空->false）
+  - `select` 多选项取首个默认，支持 type=number/boolean 转换
+  - `input` + `type=number` -> Number
+  - `select` 多选项取首个默认
+  - `type=number` 转 Number
+  - `object` 类型保留类型信息
+- **parseArguments 全面重写**：完整支持 Loon 官方 Argument 语法（switch/select/input/object/type=number/tag/desc）
+- **parseArguments**：三态 switch（true/false/空->false）
+- **parseArguments**：select 多选项取首个默认，支持 type=number/boolean 转换
+- **parseArguments**：input + type=number -> Number
+- **parseArguments**：select 多选项取首个默认
+- **parseArguments**：type=number 转 Number
+- **object** 类型保留类型信息
+- **switch** 三态（true/false/空->false）
+- **select** 多选项取首个默认，支持 type=number/boolean 转换
+
+### 修复
+
+- **parseArgKeys 逗号分割修复**：pushKV 现在正确处理 argument=[{a},{b}] 这种多 {} 块格式（支持 [] 括号）
+- **旧语法 cron 支持**：cron "..." script-path=... 语法现已支持
+- **双形态 $argument 检测**：自动用对象/数组各跑一次，结果不同即报警
+- **命中但未修改诊断**：规则命中但 $done 无改动 -> 提示检查清洗函数是否真被调用
+- **指纹输出优化**：只收集"顶层+一层对象"、数组只记长度、祖先去重
+
+### 文档
+
+- 新增 loon-sim 使用章节到 PLUGIN-DEV-GUIDE.md
+- README 增加模拟器索引链接
+- 根 README 增加模拟器索引
+
+### 验证
+
+- 内核自测：49/49 通过（新增 3 个指纹单测）
+- 历史回溯：3/3 通过
+- 端到端：popcdn 350595B->337848B, sc{}: 118->0 键
+- 双形态检测：对象/数组各跑一次，结果不同即报警
+
+---
+
+
 ---
 
 ## [1.1.1] — 2026-10-23
@@ -28,7 +75,7 @@
 - 历史回溯 3/3
 - 干净克隆开箱可用
 
----
+
 
 ## [1.1.0] — 2026-10-23
 
@@ -98,7 +145,7 @@
 - **Alibaba-AdBlock 一处畸形配置** —— `liveRemoveAds` 的 `desc` 被拆到独立行
   （成为孤立条目），模拟器 `check` 时暴露，已修复。
 
----
+
 
 ## [1.0.0] — 2026-10-23
 
