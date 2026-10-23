@@ -27,7 +27,7 @@ const lpxPath = process.argv[3];
 if (!cmd || !lpxPath) {
   console.log(`用法:
   node cli.js check   <plugin.lpx>
-  node cli.js run     <plugin.lpx> --url URL [--response-file F] [--status 200] [--phase response] [--arg k=v]
+  node cli.js convert <plugin.lpx> [-o out.lpx]  # 旧→新语法转换 (官方实现)\n  node cli.js run     <plugin.lpx> --url URL [--response-file F] [--status 200] [--phase response] [--arg k=v]
   node cli.js har     <plugin.lpx> <file.har> [--limit N] [--only substr]
   node cli.js rules   <plugin.lpx> [--url URL]`);
   process.exit(1);
@@ -496,4 +496,5 @@ else if (cmd === 'trigger') cmdTrigger();
 else if (cmd === 'run' || cmd === 'trace') cmdRun();
 else if (cmd === 'har') cmdHar();
 else if (cmd === 'rules') cmdRules();
+else if (cmd === 'convert') { require('./convert'); }
 else { console.error('未知命令: ' + cmd); process.exit(1); }

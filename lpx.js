@@ -239,7 +239,7 @@ function parseScriptRules(lines) {
         const keys = [];
         for (const part of splitTopLevel(obj[1], ',')) {
           const t = part.trim();
-          const km = /^\$\{([\w-]+)\}$/.exec(t);
+          const km = /^\$\{([\w.-]+)\}$/.exec(t);  // 参数名可含点号 (如 Home.Switch)
           if (!km) { rule.invalid = `对象参数非法成员: ${t}`; break; }
           keys.push(km[1]);
         }

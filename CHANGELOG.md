@@ -3,6 +3,29 @@
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ---
+## [1.4.0] - 2026-10-24
+
+### ★ 官方转换器本地集成（调查结论：plugin-converter 是纯浏览器本地实现）
+
+从 nsloon.app 页面 chunk 中提取官方转换器完整实现（14KB UMD），改写为 CJS 集成：
+
+- **`converter.js`** — 官方 `LoonLegacyConverter`（convertLine/convertText/argumentTypes），
+  支持全部旧→新转换：Script 五种触发 / Rewrite 全部 31 种旧 Action / 插件参数类型推断 / 逐条错误诊断
+- **`cli.js convert`** — `node cli.js convert <plugin.lpx> [-o out.lpx]` 转换并显示明细
+- **`convert-parity.js`** — ★ 转换一致性测试：官方转换后，模拟器对新旧两版本的解析决策必须等价
+  （Script 规则数/phase/trigger/scriptPath/argumentKeys + Rewrite 规则数 + Argument keys）
+
+### 修复（一致性测试抓到的真实 bug）
+
+- **新语法对象参数成员不匹配带点号参数名**：`{${Home.Switch}}` 因正则 `[\w-]+` 不含 `.` 而解析为空
+  → 修复为 `[\w.-]+`（Bilibili-UI 全部 20 个带点参数名此前在新语法下丢失）
+
+### 验证
+
+- 官方转换器冒烟：Script/Rewrite/cron/对象参数 转换输出正确
+- **全量插件一致性：38/38 通过**（PinDuoDuo 12 条 · Bilibili-Dedup 20 条 · Bilibili-UI · AgentRouter · QuarkCheckIn 等）
+- 内核自测 49/49
+
 ## [1.3.1] - 2026-10-24
 
 
