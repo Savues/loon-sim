@@ -88,11 +88,11 @@ function resolveValue(t, vars) {
 }
 
 function looseEqual(a, b) {
+  // 官方 rewrite-v2/script-v2: == 是「类型一致的精确比较」
+  // null 只等于 null; number/string/boolean 跨类型一律不等
   if (a === b) return true;
   if (a == null || b == null) return a == null && b == null;
-  if (typeof a === 'boolean' || typeof b === 'boolean') return String(a) === String(b);
-  if (typeof a === 'number' || typeof b === 'number') return Number(a) === Number(b);
-  return String(a) === String(b);
+  return false;
 }
 
 function parseRegex(t) {

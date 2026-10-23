@@ -46,7 +46,8 @@ function isRelevant(ruleCondition, url) {
   const host = hostOf(url);
   if (!host) return false;
   const cands = hostsInRegex(ruleCondition);
-  if (!cands.length) return false;              // ★ 严格：提取不出 host → 不相关
+  if (!cands.length) return true;               // ★ 提取不出 host（裸路径正则等）→ 视为相关，交给求值器判定
+                                                 //   (旧版 return false 会把 /mtop.x/i 类裸正则规则静默隐藏 → 误导排查)
   return cands.some(h => {
     const hh = h.replace(/^\*\./, '');
     if (hh === host) return true;

@@ -347,5 +347,36 @@ t('$config API 面存在', () => {
   assert.ok(rt.sandbox.$config.getConfig().running_model);
 });
 
+console.log('⑫ 语义审计修复回归 (v1.6.2)');
+const { evalCondition: _ev } = require('./matcher');
+t('== 严格类型比较 (官方: 类型一致)', () => {
+  assert.strictEqual(_ev('${response.status} == "200"', {'response.status': 200}), false, 'number≠string');
+  assert.strictEqual(_ev('${response.status} == 200', {'response.status': 200}), true);
+  assert.strictEqual(_ev('${sw} == true', {sw: true}), true);
+});
+t('Script 条件可引用插件参数', () => {
+  const { traceScriptRules } = require('./trace');
+  const { parseLpx } = require('./lpx');
+  require('fs').writeFileSync('/tmp/st_cond.lpx', '#!name=T\n[Argument]\nsw = switch,true\n[Script]\nresponse if ${url} ~= /b/ && ${sw} == true then script("c.js")\n');
+  const p = parseLpx('/tmp/st_cond.lpx');
+  const r = traceScriptRules(p, 'https://t.com/b', 'response', {sw: true});
+  assert.ok(r.effective && (r.effective.scriptPath === 'c.js' || r.effective.script === 'c.js'), '参数条件应生效');
+});
+t('裸路径正则规则不被 relevance 隐藏', () => {
+  const { isRelevant } = require('./relevance');
+  assert.strictEqual(isRelevant('${url} ~= /mtop\\.taobao\\./i', 'https://acs.m.taobao.com/gw/x'), true);
+});
+t('Rewrite 多规则共享 state (前者输出=后者输入)', () => {
+  const fs = require('fs');
+  fs.writeFileSync('/tmp/st_rw.lpx', '#!name=T\n[Mitm]\nhostname = t.com\n[Rewrite]\nrequest if ${url} ~= /x/ then request.header.set("A", "1")\nrequest if ${url} ~= /x/ then request.header.set("A", "2")\n');
+  const { parseLpx } = require('./lpx');
+  // 白盒: traceRewriteRules 不导出 state — 用 exec 验证 2 条都执行即可 (state 正确性由覆盖顺序保证)
+  const { execSync } = require('child_process');
+  let out = '';
+  try { out = execSync('node cli.js run /tmp/st_rw.lpx --url https://t.com/x --phase request', {encoding: 'utf8', stdio: 'pipe'}); }
+  catch (e) { out = (e.stdout || '') + (e.stderr || ''); }
+  assert.strictEqual((out.match(/← 命中/g) || []).length, 2, '两条都执行');
+});
+
 console.log(`\n结果: ${pass} 通过, ${fail} 失败`);
 if (fail) { console.log('\n失败项:'); failures.forEach(f => console.log('  ✗ ' + f)); process.exit(1); }

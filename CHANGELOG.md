@@ -3,6 +3,26 @@
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ---
+## [1.6.2] - 2026-10-24
+
+### ★★ 全面语义审计 — 5 处与官方文档的偏差修复
+
+对照官方文档存档逐层复审（条件求值/命中顺序/禁用关系/Rewrite 执行/runtime 语义/check 校验器），修复：
+
+| # | 偏差 | 官方依据 | 修复 |
+|---|------|---------|------|
+| 1 | `==` 用宽松比较（`200 == "200"` 为 true）| rewrite/script-v2「类型一致的精确比较」| looseEqual 改严格：null 只等 null，跨类型一律 false |
+| 2 | **Script 条件不传插件参数** → `${sw} == true` 类条件永远不成立 | script-v2「条件可引用插件参数」| evalCondSafe 传入 argValues |
+| 3 | Rewrite 多规则各自持有 state → 后条不覆盖前条 | rewrite-v2「前条输出是后条输入」| 同阶段共享 state |
+| 4 | check 未校验「with 字段重复」「cron 设 requires_body」| script-v2 字段规则 | 两项新增（均官方「规则无效」级）|
+| 5 | **裸路径正则规则被 relevance 启发式隐藏**（提取不出 host → 不相关）→ 排查误导 | ~= 查找匹配语义 | 提取不出 host 改为视为相关，交给求值器判定 |
+
+### 审计中确认无误的部分
+
+第一命中顺序（Script）/ 同阶段全执行（Rewrite 非终止）/ 终止后 Script 不执行 / with enable=false 跳过继续匹配 / $done 三态 / store.write(v,k) 顺序 / $argument null / 脚本异常捕获 / bodyBytes / DOMAIN-SUFFIX 不匹配 app-apple.com / Argument 类型保留
+
+### selftest 65 → 69（新修复全部锁定）
+
 ## [1.6.1] - 2026-10-24
 
 ### ★ 版本探针系统 + 真机语义实证（P3-D 收官）

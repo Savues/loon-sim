@@ -176,6 +176,23 @@ function cmdCheck() {
     if (!mitmSet.has(h) && !p.rules.some(r => r.value === h)) console.log(`⚠️  规则引用 ${h} 但不在 [Mitm] 也不在 [Rule]（路径规则将失效）`);
   }
 
+  // with 字段不能重复 (官方: 字段重复→规则无效)
+  for (const r of p.scriptRules) {
+    if (r.legacy) continue;
+    const seen = new Set();
+    const dup = [];
+    for (const m of String(r.raw || '').matchAll(/(?:^|with\s|,\s)([a-z_]+)=/g)) {
+      if (seen.has(m[1])) dup.push(m[1]); else seen.add(m[1]);
+    }
+    if (dup.length) { console.log(`❌ [Script] with 字段重复: ${[...new Set(dup)].join(',')}（官方: 规则无效）`); errs++; }
+    // cron/network-changed/generic 不能设 requires_body / binary_body_mode (无 HTTP Body)
+    const trig = String(r.trigger || '').split(' ')[0];
+    if (['cron', 'network-changed', 'generic'].includes(trig)) {
+      if (/requires_body\s*=\s*true/.test(r.raw || '')) { console.log(`❌ [Script] ${trig} 类规则不能设置 requires_body（无 HTTP Body）`); errs++; }
+      if (/binary_body_mode\s*=\s*true/.test(r.raw || '')) { console.log(`❌ [Script] ${trig} 类规则不能设置 binary_body_mode`); errs++; }
+    }
+  }
+
   // 插件对象参数约束: {${a},${b}} 不能空/重复/未声明 (官方: 违反→当前规则无效)
   for (const r of p.scriptRules) {
     if (r.invalid) continue; // 解析失败的规则已由上面报过, 不重复

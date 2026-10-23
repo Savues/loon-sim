@@ -29,6 +29,8 @@ function evalCondSafe(cond, vars) {
 // ---- 逐条 Rewrite 规则的判定 ----
 function traceRewriteRules(lpx, url, phase, argValues) {
   const out = [];
+  // 官方语义: 同阶段所有命中规则按序执行, 前条输出是后条输入 → 共享一个 state
+  const sharedState = { url, headers: {}, respHeaders: {}, status: 200, body: null };
   for (const r of lpx.rewriteRules || []) {
     const rec = { raw: r.raw, phase: r.phase, cond: r.condition, action: r.action };
     rec.relevant = isRelevant(r.condition, url);
@@ -43,7 +45,7 @@ function traceRewriteRules(lpx, url, phase, argValues) {
     if (v === true && r.action) {
       try {
         const { execRewrite } = require('./rewrite-exec');
-        const st = r.sharedState || (r.sharedState = { url, headers: {}, respHeaders: {}, status: 200, body: null });
+        const st = sharedState;
         const exec = execRewrite(st, r.action, vars);
         rec.exec = exec.actions.map(a => ({ name: a.name, ok: a.ok, error: a.error }));
         rec.terminated = exec.terminated;
@@ -69,7 +71,7 @@ function traceScriptRules(lpx, url, phase, argValues) {
     rec.relevant = isRelevant(r.condition, url);
     if (r.phase === 'other') { rec.result = 'skip'; rec.reason = `触发类型=${r.trigger}（非 HTTP）`; out.push(rec); continue; }
     if (r.phase !== phase) { rec.result = 'skip'; rec.reason = `阶段不符（规则=${r.phase}，当前=${phase}）`; out.push(rec); continue; }
-    const v = evalCondSafe(r.condition, { url });
+    const v = evalCondSafe(r.condition, { url, ...(argValues || {}) });
     if (v !== true) { rec.result = 'no'; rec.reason = 'URL Guard / 条件不成立'; out.push(rec); continue; }
     // 命中 → 检查 with enable
     const en = r.options && r.options.enable;
