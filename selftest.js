@@ -433,5 +433,24 @@ t('含下划线的 enable 引用不算死参数', () => {
   assert.ok(!out.includes('my_switch_key') || !out.includes('死参数'), '含下划线参数不应误报死参数');
 });
 
+console.log('⑯ 死代码检测器 (v1.6.7)');
+t('dead-fn: 孤儿函数检出 + 正常函数不误报', () => {
+  const fs = require('fs');
+  fs.writeFileSync('/tmp/st_dead.js', 'function main(){ helper1(); }\nfunction helper1(){ return 1; }\nfunction orphan(){ return 2; }\n');
+  const { execSync } = require('child_process');
+  let out = '';
+  try { out = execSync('node dead-fn.js /tmp/st_dead.js', {encoding:'utf8'}); } catch (e) { out = e.stdout || ''; }
+  assert.ok(out.includes('orphan'), '应检出 orphan');
+  assert.ok(!out.includes('helper1'), 'helper1 被调用不应误报');
+});
+t('dead-fn: 混淆函数名豁免', () => {
+  const fs = require('fs');
+  fs.writeFileSync('/tmp/st_dead2.js', 'function a0_0xabcd(){return 1;}\n');
+  const { execSync } = require('child_process');
+  let out = '';
+  try { out = execSync('node dead-fn.js /tmp/st_dead2.js', {encoding:'utf8'}); } catch (e) { out = (e.stdout||'') + (e.stderr||''); }
+  assert.ok(out.includes('死代码: 无'), '混淆名应豁免: ' + out.slice(0,80));
+});
+
 console.log(`\n结果: ${pass} 通过, ${fail} 失败`);
 if (fail) { console.log('\n失败项:'); failures.forEach(f => console.log('  ✗ ' + f)); process.exit(1); }

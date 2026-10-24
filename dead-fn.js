@@ -39,14 +39,16 @@ for (const d of defs) {
   if (refs === 0) dead.push(d);
 }
 
-// 入口函数豁免 (main 等)
+// 入口函数豁免 (main 等); 混淆函数名豁免 (a0_0x..., 多为字符串解码器, 词边界分析不适用)
 const ENTRY = new Set(['main']);
+const OBFUSCATED = /^a\d+_\w+$|_0x/;
+const isExempt = (d) => ENTRY.has(d.name) || OBFUSCATED.test(d.name);
 
 if (asJson) {
-  console.log(JSON.stringify({ total: defs.length, dead: dead.filter(d => !ENTRY.has(d.name)) }));
+  console.log(JSON.stringify({ total: defs.length, dead: dead.filter(d => !isExempt(d)) }));
 } else {
   console.log(`函数定义: ${defs.length} (顶格)`);
-  const realDead = dead.filter(d => !ENTRY.has(d.name));
+  const realDead = dead.filter(d => !isExempt(d));
   if (realDead.length === 0) {
     console.log('死代码: 无 ✅');
   } else {
