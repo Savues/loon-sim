@@ -31,13 +31,14 @@ function traceRewriteRules(lpx, url, phase, argValues) {
   const out = [];
   // 官方语义: 同阶段所有命中规则按序执行, 前条输出是后条输入 → 共享一个 state
   const sharedState = { url, headers: {}, respHeaders: {}, status: 200, body: null };
+  // v1.6.5: 条件求值并入插件参数 (Rewrite v2 条件式支持 ${参数} — 与 Script 段同款, v1.6.2 修Script时漏了此处)
   for (const r of lpx.rewriteRules || []) {
     const rec = { raw: r.raw, phase: r.phase, cond: r.condition, action: r.action };
     rec.relevant = isRelevant(r.condition, url);
     // 阶段不符
     if (r.phase !== phase) { rec.result = 'skip'; rec.reason = `阶段不符（规则=${r.phase}，当前=${phase}）`; out.push(rec); continue; }
-    // 条件求值 (as 捕获写入 vars)
-    const vars = { url };
+    // 条件求值 (as 捕获写入 vars; 参数并入 — 条件式 Rewrite 可引用插件参数)
+    const vars = { url, ...(argValues || {}) };
     const v = evalCondSafe(r.condition, vars);
     if (v === true) { rec.result = 'match'; }
     else { rec.result = 'no'; rec.reason = '条件不成立'; }
