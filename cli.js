@@ -62,8 +62,8 @@ function cmdCheck() {
     for (const k of (r.argumentKeys || [])) usedInRules.add(k);
     // 旧语法: enable={k} 在 options.enable 或 raw 中
     let en = r.options && r.options.enable;
-    if (en) { const m = /^\{?([a-zA-Z][a-zA-Z0-9]*)\}?$/.exec(String(en).trim().replace(/^\$\{/,'').replace(/\}$/,'')); if (m) usedInEnable.add(m[1]); }
-    else if (r.raw) { const m = /enable=\{?(\$\{)?([a-zA-Z][a-zA-Z0-9]*)\}(\})?/.exec(r.raw); if (m) usedInEnable.add(m[2]); }
+    if (en) { const m = /^\{?([a-zA-Z][a-zA-Z0-9_]*)\}?$/.exec(String(en).trim().replace(/^\$\{/,'').replace(/\}$/,'')); if (m) usedInEnable.add(m[1]); }
+    else if (r.raw) { const m = /enable=\{?(\$\{)?([a-zA-Z][a-zA-Z0-9_]*)\}(\})?/.exec(r.raw); if (m) usedInEnable.add(m[2]); }
   }
   for (const r of p.rewriteRules) {
     if (r.action && r.action.includes('enable')) {
