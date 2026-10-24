@@ -3,6 +3,25 @@
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ---
+## [1.6.8] - 2026-10-24
+
+### ★ check 新增: 正则字面量闭合校验 (探针穿透事故驱动)
+
+- 全部 Script+Rewrite 规则的 `~= /re/` 必须以 `/` 或 `/flags` 结束; 不闭合 → 报"规则永不匹配"错误
+- 事故背景: probe-setup 生成的探针正则缺尾斜杠, 真机上规则永不匹配且无任何提示
+- 验证: 坏正则检出 ✅ · SMZDM/RedPaper 等旧插件 0 误报 ✅
+
+### 修复 probe-setup 双 bug
+
+1. 探针正则补 `/i` 结尾 (根源)
+2. pat 兼容新旧形态 — probe_path 带 flag 后匹配不到旧规则, 重跑时重复埋入 (SMZDM 曾出现 2 条探针)
+
+### selftest: iSH 嵌套 node 容错 (tExec 机制)
+
+- **iSH 环境级 bug 实证**: node 内嵌套 node 跑任何 JS → ETIMEDOUT/Killed (`--version` 可, `-e` 不可; async spawn 同样卡; JIT flags 无效)
+- 新增 `nestedNodeAvailable()` 探测 + `tExec()` — 嵌套不可用时 execSync 类用例跳过 (标 SKIP 不计失败), 提示在 iSH 顶层补跑
+- 本次: 74 通过 / 0 失败 / 5 跳过, 跳过的 5 用例已逐个在顶层补验全过 ✅
+
 ## [1.6.7] - 2026-10-24
 
 ### 新增: dead-fn.js 死代码检测器 (+ ci.sh 第⑤段)
@@ -41,6 +60,25 @@ zip 内每请求一目录: `request_header_raw.txt` (HTTP/2 `:authority`/`:path`
 官方文档"条件表达式支持插件参数" + 模拟器双态验证 + 真机 replace_body 实证 = `[Rewrite]` 段的开关能力确立 (旧语法 `, enable=` 无效的结论不适用于 v2 条件式)
 
 ## [1.6.4] - 2026-10-24
+## [1.6.8] - 2026-10-24
+
+### ★ check 新增: 正则字面量闭合校验 (探针穿透事故驱动)
+
+- 全部 Script+Rewrite 规则的 `~= /re/` 必须以 `/` 或 `/flags` 结束; 不闭合 → 报"规则永不匹配"错误
+- 事故背景: probe-setup 生成的探针正则缺尾斜杠, 真机上规则永不匹配且无任何提示
+- 验证: 坏正则检出 ✅ · SMZDM/RedPaper 等旧插件 0 误报 ✅
+
+### 修复 probe-setup 双 bug
+
+1. 探针正则补 `/i` 结尾 (根源)
+2. pat 兼容新旧形态 — probe_path 带 flag 后匹配不到旧规则, 重跑时重复埋入 (SMZDM 曾出现 2 条探针)
+
+### selftest: iSH 嵌套 node 容错 (tExec 机制)
+
+- **iSH 环境级 bug 实证**: node 内嵌套 node 跑任何 JS → ETIMEDOUT/Killed (`--version` 可, `-e` 不可; async spawn 同样卡; JIT flags 无效)
+- 新增 `nestedNodeAvailable()` 探测 + `tExec()` — 嵌套不可用时 execSync 类用例跳过 (标 SKIP 不计失败), 提示在 iSH 顶层补跑
+- 本次: 74 通过 / 0 失败 / 5 跳过, 跳过的 5 用例已逐个在顶层补验全过 ✅
+
 ## [1.6.7] - 2026-10-24
 
 ### 新增: dead-fn.js 死代码检测器 (+ ci.sh 第⑤段)

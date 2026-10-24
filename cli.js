@@ -176,6 +176,24 @@ function cmdCheck() {
     if (!mitmSet.has(h) && !p.rules.some(r => r.value === h)) console.log(`⚠️  规则引用 ${h} 但不在 [Mitm] 也不在 [Rule]（路径规则将失效）`);
   }
 
+  // 正则字面量闭合校验 (~= /re/ 必须以 / 或 /flags 结束 — 不闭合则规则永不匹配)
+  // 2026-10-24 探针穿透事故驱动: probe-setup 曾生成无尾斜杠正则
+  for (const r of [...p.scriptRules, ...p.rewriteRules]) {
+    const cond = String(r.condition || '');
+    const m = /~=\s*([^&()]+?)(?:\s+as\s+\w+)?\s*$/.exec(cond.trim());
+    if (!m) continue;
+    const rhs = m[1].trim();
+    if (!rhs.startsWith('/')) continue;
+    // 提取最后一个 '/' 之后的部分: 若无尾斜杠则不闭合
+    const lastSlash = rhs.lastIndexOf('/');
+    if (lastSlash <= 0) { console.log(`❌ 正则字面量未闭合 (缺尾 / 或 flag): ${rhs.slice(0, 60)} —— 规则永不匹配`); errs++; continue; }
+    const flags = rhs.slice(lastSlash + 1);
+    if (!/^[a-z]*$/.test(flags)) { console.log(`❌ 正则字面量未闭合 (尾段非 flag): ${rhs.slice(0, 60)}`); errs++; continue; }
+    // 与 parseRegex 复核: 能否解析
+    const { parseRegex } = require('./matcher');
+    if (!parseRegex(rhs)) { console.log(`❌ 正则无法解析: ${rhs.slice(0, 60)}`); errs++; }
+  }
+
   // with 字段不能重复 (官方: 字段重复→规则无效)
   for (const r of p.scriptRules) {
     if (r.legacy) continue;

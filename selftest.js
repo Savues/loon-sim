@@ -13,11 +13,28 @@ const { createRuntime } = require('./runtime');
 const { diffFingerprint, shapeMap } = require('./trace');
 const fs = require('fs');
 
-let pass = 0, fail = 0;
+let pass = 0, fail = 0, skipped = 0;
 const failures = [];
 function t(name, fn) {
   try { fn(); pass++; }
   catch (e) { fail++; failures.push(`${name}\n    ${e.message.split('\n')[0]}`); }
+}
+// 嵌套 node 可用性探测 (iSH fork bug 环境: 嵌套 node 跑 JS 会 ETIMEDOUT/被杀)
+// 不可用时 execSync 类用例跳过 (标 SKIP 不计失败) — 顶层 shell 跑 node 不受影响
+let NESTED_NODE_OK = null;
+function nestedNodeAvailable() {
+  if (NESTED_NODE_OK !== null) return NESTED_NODE_OK;
+  try {
+    const { spawnSync } = require('child_process');
+    const r = spawnSync('/usr/bin/node', ['-e', 'process.exit(0)'], {timeout: 5000});
+    NESTED_NODE_OK = r.status === 0;
+  } catch { NESTED_NODE_OK = false; }
+  if (!NESTED_NODE_OK) console.log('⚠️  iSH 嵌套 node 不可用 (fork bug) — execSync 用例将跳过, 请在 iSH 顶层补跑');
+  return NESTED_NODE_OK;
+}
+function tExec(name, fn) {
+  if (!nestedNodeAvailable()) { skipped++; return; }
+  t(name, fn);
 }
 
 console.log('=== 模拟器自测 ===\n');
@@ -366,7 +383,7 @@ t('裸路径正则规则不被 relevance 隐藏', () => {
   const { isRelevant } = require('./relevance');
   assert.strictEqual(isRelevant('${url} ~= /mtop\\.taobao\\./i', 'https://acs.m.taobao.com/gw/x'), true);
 });
-t('Rewrite 多规则共享 state (前者输出=后者输入)', () => {
+tExec('Rewrite 多规则共享 state (前者输出=后者输入)', () => {
   const fs = require('fs');
   fs.writeFileSync('/tmp/st_rw.lpx', '#!name=T\n[Mitm]\nhostname = t.com\n[Rewrite]\nrequest if ${url} ~= /x/ then request.header.set("A", "1")\nrequest if ${url} ~= /x/ then request.header.set("A", "2")\n');
   const { parseLpx } = require('./lpx');
@@ -398,7 +415,7 @@ t('mock 后 header action 继续执行', () => {
   assert.strictEqual(st.respHeaders['X'], '1');
   assert.strictEqual(r.terminated, true, '对 Script 层仍是终止');
 });
-t('check: timeout=0 检出 / timeout={n} 合法', () => {
+tExec('check: timeout=0 检出 / timeout={n} 合法', () => {
   const fs = require('fs');
   const { execSync } = require('child_process');
   fs.writeFileSync('/tmp/st_t1.lpx', '#!name=T\n#!version=1\n[Script]\nrequest if ${url} ~= /a/ then script("a.js") with timeout=0\n');
@@ -424,7 +441,7 @@ t('header.add 批量数组参数 (官方转换器产物形态)', () => {
 });
 
 console.log('⑮ 死参数检查下划线回归 (v1.6.6)');
-t('含下划线的 enable 引用不算死参数', () => {
+tExec('含下划线的 enable 引用不算死参数', () => {
   const fs = require('fs');
   fs.writeFileSync('/tmp/st_us.lpx', '#!name=T\n#!version=1\n[Argument]\nmy_switch_key = switch,true\n[Script]\nhttp-response ^https://x script-path=a.js, enable={my_switch_key}\n');
   const { execSync } = require('child_process');
@@ -434,7 +451,7 @@ t('含下划线的 enable 引用不算死参数', () => {
 });
 
 console.log('⑯ 死代码检测器 (v1.6.7)');
-t('dead-fn: 孤儿函数检出 + 正常函数不误报', () => {
+tExec('dead-fn: 孤儿函数检出 + 正常函数不误报', () => {
   const fs = require('fs');
   fs.writeFileSync('/tmp/st_dead.js', 'function main(){ helper1(); }\nfunction helper1(){ return 1; }\nfunction orphan(){ return 2; }\n');
   const { execSync } = require('child_process');
@@ -443,7 +460,7 @@ t('dead-fn: 孤儿函数检出 + 正常函数不误报', () => {
   assert.ok(out.includes('orphan'), '应检出 orphan');
   assert.ok(!out.includes('helper1'), 'helper1 被调用不应误报');
 });
-t('dead-fn: 混淆函数名豁免', () => {
+tExec('dead-fn: 混淆函数名豁免', () => {
   const fs = require('fs');
   fs.writeFileSync('/tmp/st_dead2.js', 'function a0_0xabcd(){return 1;}\n');
   const { execSync } = require('child_process');
@@ -452,5 +469,12 @@ t('dead-fn: 混淆函数名豁免', () => {
   assert.ok(out.includes('死代码: 无'), '混淆名应豁免: ' + out.slice(0,80));
 });
 
-console.log(`\n结果: ${pass} 通过, ${fail} 失败`);
+t('check: 正则字面量未闭合检出 (probe-setup事故类, 进程内验证)', () => {
+  // 与 cli.js check 同源逻辑: 无尾斜杠/flag 的正则 parseRegex 返回 null
+  const { parseRegex } = require('./matcher');
+  assert.strictEqual(parseRegex('/gw/loon-sim\\.probe\\.bad_name'), null, '无尾斜杠应不可解析');
+  assert.ok(parseRegex('/gw/loon-sim\\.probe\\.name/i') instanceof RegExp, '带 /i 应可解析');
+});
+
+console.log(`\n结果: ${pass} 通过, ${fail} 失败${skipped ? ' · ' + skipped + ' 跳过(iSH嵌套不可用)' : ''}`);
 if (fail) { console.log('\n失败项:'); failures.forEach(f => console.log('  ✗ ' + f)); process.exit(1); }
