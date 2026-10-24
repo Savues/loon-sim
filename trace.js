@@ -27,10 +27,10 @@ function evalCondSafe(cond, vars) {
 }
 
 // ---- 逐条 Rewrite 规则的判定 ----
-function traceRewriteRules(lpx, url, phase, argValues) {
+function traceRewriteRules(lpx, url, phase, argValues, body) {
   const out = [];
   // 官方语义: 同阶段所有命中规则按序执行, 前条输出是后条输入 → 共享一个 state
-  const sharedState = { url, headers: {}, respHeaders: {}, status: 200, body: null };
+  const sharedState = { url, headers: {}, respHeaders: {}, status: 200, body: body !== undefined ? body : null };
   // v1.6.5: 条件求值并入插件参数 (Rewrite v2 条件式支持 ${参数} — 与 Script 段同款, v1.6.2 修Script时漏了此处)
   for (const r of lpx.rewriteRules || []) {
     const rec = { raw: r.raw, phase: r.phase, cond: r.condition, action: r.action };
