@@ -62,6 +62,8 @@ sh ci.sh
 ```bash
 sh version-probe.sh <plugin.lpx>          # ✅ 转 0=可测; 🔴 2=设备旧版结论作废
 sh version-probe.sh <plugin.lpx> setup    # 埋/更新探针（改版本号后重跑）
+
+> 探针模板、check 六项校验、穿透排障表、历史事故复盘 → **[docs/version-probe.md](docs/version-probe.md)**
 ```
 
 ---
