@@ -176,6 +176,33 @@ function cmdCheck() {
     if (!mitmSet.has(h) && !p.rules.some(r => r.value === h)) console.log(`⚠️  规则引用 ${h} 但不在 [Mitm] 也不在 [Rule]（路径规则将失效）`);
   }
 
+  // 探针一致性检查 (2026-10-24 探针事故三连驱动: 缺尾斜杠/版本不同步/订阅延迟误判)
+  const ver = lpx.header?.version;
+  if (ver) {
+    const probeRules = [...p.scriptRules, ...p.rewriteRules].filter(r => /loon-sim.{0,3}probe/.test(String(r.condition || r.raw || '')));
+    if (probeRules.length === 0) {
+      console.log(`⚠️ 有 #!version=${ver} 但未埋版本探针 — version-probe.sh 无法验证设备版本 (跑 probe-setup.py 埋入)`);
+      warns++;
+    } else {
+      for (const r of probeRules) {
+        const isABProbe = /(probe[._]?(bare|ab|bare2)|_bare)/i.test(String(r.condition || r.raw || ''));
+        if (isABProbe) continue;  // A/B 对照探针 (bare/ab) 豁免 — 与主探针合法共存
+        const m = /reject\(200, "([^"]+)"\)/.exec(String(r.raw || ''));
+        if (m && m[1] !== ver) {
+          console.log(`❌ 探针版本 "${m[1]}" ≠ #!version ${ver} — 版本未同步 (重跑 probe-setup.py)`);
+          errs++;
+        }
+      }
+      // 辅助文件
+      const fsx = require('fs');
+      const probeFile = lpxPath + '.probe';
+      if (!fsx.existsSync(probeFile)) {
+        console.log(`⚠️ 缺 ${require('path').basename(probeFile)} — version-probe.sh 读不到探针 URL`);
+        warns++;
+      }
+    }
+  }
+
   // 正则字面量闭合校验 (~= /re/ 必须以 / 或 /flags 结束 — 不闭合则规则永不匹配)
   // 2026-10-24 探针穿透事故驱动: probe-setup 曾生成无尾斜杠正则
   for (const r of [...p.scriptRules, ...p.rewriteRules]) {
