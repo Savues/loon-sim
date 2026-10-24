@@ -184,13 +184,45 @@ function cmdCheck() {
       console.log(`⚠️ 有 #!version=${ver} 但未埋版本探针 — version-probe.sh 无法验证设备版本 (跑 probe-setup.py 埋入)`);
       warns++;
     } else {
+      const mainProbes = [];
       for (const r of probeRules) {
-        const isABProbe = /(probe[._]?(bare|ab|bare2)|_bare)/i.test(String(r.condition || r.raw || ''));
+        const raw = String(r.raw || '');
+        const cond = String(r.condition || '');
+        const isABProbe = /(probe[._]?(bare|ab|bare2)|_bare)/i.test(cond + raw);
         if (isABProbe) continue;  // A/B 对照探针 (bare/ab) 豁免 — 与主探针合法共存
-        const m = /reject\(200, "([^"]+)"\)/.exec(String(r.raw || ''));
-        if (m && m[1] !== ver) {
+        mainProbes.push(r);
+      }
+      if (mainProbes.length > 1) {
+        console.log(`❌ 主探针有 ${mainProbes.length} 条 (应恰好 1 条) — 重复埋入, 重跑 probe-setup.py`);
+        errs++;
+      }
+      for (const r of mainProbes) {
+        const raw = String(r.raw || '');
+        const cond = String(r.condition || '');
+        // ① 模板形态: 必须完整锚定 ^https?://.../i (lpx解析后是 \/ 转义文本, 用包含检测)
+        if (!cond.includes('^https?:')) {
+          console.log(`❌ 探针必须用完整锚定形态 ^https?://域名/.../i (模板锁定): ${cond.slice(0, 70)}`);
+          errs++;
+        }
+        // ② reject(200, "版本") 双参
+        const m = /reject\(200, "([^"]+)"\)/.exec(raw);
+        if (!m) {
+          console.log(`❌ 探针必须用 reject(200, "版本号") 双参形态: ${raw.slice(-50)}`);
+          errs++;
+        } else if (m[1] !== ver) {
           console.log(`❌ 探针版本 "${m[1]}" ≠ #!version ${ver} — 版本未同步 (重跑 probe-setup.py)`);
           errs++;
+        }
+        // ④ 探针域名必须在 [MitM] 列表
+        const dm = /\^https\?:\\\/\\\/([^\\/ ]+?)\\\//.exec(cond);
+        const hostRe = dm ? dm[1] : null;
+        if (hostRe && !hostRe.includes('^[')) {  // 简单域名形态才校验 (字符族跳过)
+          const host = hostRe.replace(/\\\./g, '.').replace(/\(\?:/g, '(');
+          const mitmOk = (lpx.mitm || []).some(h => host.includes(h.replace(/^\*\./, '')) || h.replace(/^\*\./, '').includes(host.replace(/[()^$]/g, '')));
+          if (!mitmOk && (lpx.mitm || []).length) {
+            console.log(`⚠️ 探针域名 "${host}" 不在 [MitM] 列表 — 探针可能因不解密而穿透`);
+            warns++;
+          }
         }
       }
       // 辅助文件
