@@ -423,5 +423,15 @@ t('header.add 批量数组参数 (官方转换器产物形态)', () => {
   assert.strictEqual(st.headers['B'], '2');
 });
 
+console.log('⑮ 死参数检查下划线回归 (v1.6.6)');
+t('含下划线的 enable 引用不算死参数', () => {
+  const fs = require('fs');
+  fs.writeFileSync('/tmp/st_us.lpx', '#!name=T\n#!version=1\n[Argument]\nmy_switch_key = switch,true\n[Script]\nhttp-response ^https://x script-path=a.js, enable={my_switch_key}\n');
+  const { execSync } = require('child_process');
+  let out = '';
+  try { out = execSync('node cli.js check /tmp/st_us.lpx', {encoding:'utf8'}); } catch (e) { out = e.stdout || ''; }
+  assert.ok(!out.includes('my_switch_key') || !out.includes('死参数'), '含下划线参数不应误报死参数');
+});
+
 console.log(`\n结果: ${pass} 通过, ${fail} 失败`);
 if (fail) { console.log('\n失败项:'); failures.forEach(f => console.log('  ✗ ' + f)); process.exit(1); }
