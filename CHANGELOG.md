@@ -3,7 +3,41 @@
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ---
+## [1.6.5] - 2026-10-24
+
+### 修复: Rewrite 条件求值漏并插件参数 (v1.6.2 同类第二处)
+
+- `traceRewriteRules` 的求值变量只有 `{url}` → 条件式 Rewrite (`&& ${参数} == true`) 的参数引用恒为 undefined → 永不命中
+- v1.6.2 修复 Script 段同款问题时漏了 Rewrite 段 — 双处同源 bug 的第二处
+- 修复后经 RedPaper v1.3.0 的 removeDianDian 开关验证: on=1 命中 / off=0 命中 ✅
+- **真机交叉验证**: Loon 分目录抓包的 `replace_response_body_raw` 证实条件式 Rewrite 真机生效 (agentspark → {} 2B)
+
+### 新知识: Loon 分目录抓包格式
+
+zip 内每请求一目录: `request_header_raw.txt` (HTTP/2 `:authority`/`:path` 分离, 重组 URL 需拼接) + `response_body_raw` + **`replace_response_body_raw` (插件替换后的响应)** —— replace_* 是插件真机生效的直接证据, 比 HAR 更强 (HAR 记录的处理时点不确定)
+
+### 意义: 条件式 Rewrite 开关路线打通
+
+官方文档"条件表达式支持插件参数" + 模拟器双态验证 + 真机 replace_body 实证 = `[Rewrite]` 段的开关能力确立 (旧语法 `, enable=` 无效的结论不适用于 v2 条件式)
+
 ## [1.6.4] - 2026-10-24
+## [1.6.5] - 2026-10-24
+
+### 修复: Rewrite 条件求值漏并插件参数 (v1.6.2 同类第二处)
+
+- `traceRewriteRules` 的求值变量只有 `{url}` → 条件式 Rewrite (`&& ${参数} == true`) 的参数引用恒为 undefined → 永不命中
+- v1.6.2 修复 Script 段同款问题时漏了 Rewrite 段 — 双处同源 bug 的第二处
+- 修复后经 RedPaper v1.3.0 的 removeDianDian 开关验证: on=1 命中 / off=0 命中 ✅
+- **真机交叉验证**: Loon 分目录抓包的 `replace_response_body_raw` 证实条件式 Rewrite 真机生效 (agentspark → {} 2B)
+
+### 新知识: Loon 分目录抓包格式
+
+zip 内每请求一目录: `request_header_raw.txt` (HTTP/2 `:authority`/`:path` 分离, 重组 URL 需拼接) + `response_body_raw` + **`replace_response_body_raw` (插件替换后的响应)** —— replace_* 是插件真机生效的直接证据, 比 HAR 更强 (HAR 记录的处理时点不确定)
+
+### 意义: 条件式 Rewrite 开关路线打通
+
+官方文档"条件表达式支持插件参数" + 模拟器双态验证 + 真机 replace_body 实证 = `[Rewrite]` 段的开关能力确立 (旧语法 `, enable=` 无效的结论不适用于 v2 条件式)
+
 ## [1.6.4] 附: 仓库插件可靠性批量实测
 
 新增 `reliability-test.js`（从插件真实规则自动提取 URL 全量决策追踪）：
