@@ -3,6 +3,15 @@
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ---
+## [1.7.3] - 2026-10-25
+
+### ★ ci.sh 第⑥段: 双仓一致性检查 (用户提问驱动 — "会不会只更新一边漏另一边")
+
+- 自动克隆独立仓 Savues/loon-sim, diff 25 个关键文件 (文档+代码), 不一致 → ❌ exit 5
+- **首跑即抓到实证**: `probe-setup.py` 和 `version-probe.sh` 从未被 sync-standalone.sh 同步过 (cp 列表只含 *.js/*.md/regression-history.sh) — 独立仓的探针工具一直是旧版, v1.7.2 幂等重写从未到达独立仓
+- 修复: sync 脚本补两文件 → 同步 → CI 双仓一致 ✅
+- 意义: 漏同步从此被 CI 红灯拦截, 不再依赖人记得跑 sync
+
 ## [1.7.2] - 2026-10-25
 
 ### ★ check 新增: 脚本 $done 静态检查 (残废脚本防线)
@@ -121,6 +130,15 @@ zip 内每请求一目录: `request_header_raw.txt` (HTTP/2 `:authority`/`:path`
 官方文档"条件表达式支持插件参数" + 模拟器双态验证 + 真机 replace_body 实证 = `[Rewrite]` 段的开关能力确立 (旧语法 `, enable=` 无效的结论不适用于 v2 条件式)
 
 ## [1.6.4] - 2026-10-24
+## [1.7.3] - 2026-10-25
+
+### ★ ci.sh 第⑥段: 双仓一致性检查 (用户提问驱动 — "会不会只更新一边漏另一边")
+
+- 自动克隆独立仓 Savues/loon-sim, diff 25 个关键文件 (文档+代码), 不一致 → ❌ exit 5
+- **首跑即抓到实证**: `probe-setup.py` 和 `version-probe.sh` 从未被 sync-standalone.sh 同步过 (cp 列表只含 *.js/*.md/regression-history.sh) — 独立仓的探针工具一直是旧版, v1.7.2 幂等重写从未到达独立仓
+- 修复: sync 脚本补两文件 → 同步 → CI 双仓一致 ✅
+- 意义: 漏同步从此被 CI 红灯拦截, 不再依赖人记得跑 sync
+
 ## [1.7.2] - 2026-10-25
 
 ### ★ check 新增: 脚本 $done 静态检查 (残废脚本防线)
