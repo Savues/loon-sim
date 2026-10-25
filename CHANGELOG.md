@@ -3,6 +3,34 @@
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ---
+## [1.7.4] - 2026-10-26
+
+### ★ relevance.js: 捕获组支持 (静默隐藏类缺陷修复)
+
+- **缺陷**: `expand()` 只认 `(?:...)` 非捕获组; 捕获组形态 `(grpc\.biliapi\.net|app\.bili...)`
+  的 host 段被整段粘连成一个假 host（`grpc.biliapi.netapp.bilibili.com`）→ `isRelevant` 误判
+  规则「不相关」→ trace **静默隐藏**（四合一 16 条 Rewrite 全部中招, 排查时看到假的空结果）
+- **修复**: 展开正则改为同时支持两种分组（`\((?:\?:)?([^)]*)\)`)
+- 实证: 四合一 ModeStatus 规则从「trace 无此规则」变为「hosts 三候选正确展开」
+
+### ★ legacy 旧语法规则: phase 推断 + URL 直接匹配 + converter 即时转换
+
+- **缺陷**: 无阶段前缀的旧语法规则（`^...$ mock-response-body ...`）解析为 phase=null →
+  trace 一律显示「阶段不符」且不执行 → sim 无法验证旧语法规则（真机 Loon 一直生效, HAR 实证）
+- **修复三步**:
+  ① `parseRewriteRules`: 按 Loon 官方语义推断 phase（`mock-response-body/response-*` → response,
+     `reject*/request-*` → request）, `splitLegacyAction` 拆出 URL 正则与动作串
+  ② `trace`: 旧语法条件 = URL 正则直接匹配（替代条件表达式求值）
+  ③ 动作经内置官方 converter 即时转新语法再执行（execRewrite 只认新语法）
+- **实证**: Dedup ModeStatus 旧语法 mock 实测 match + mock 写入 7 字节（AAAAAAIKAA==）
+- 意义: 仓库中全部旧语法规则（Dedup 15 条等）从此可被 sim 验证
+
+### 同期: audit.py 落地（第②层守门员, 见 plugins 仓 f2aebfb）
+
+- 资源 URL 可达性 / 同名脚本多副本一致性 / 缓存戳漂移 — 三起真事故(404/打错副本/缓存戳回退)的
+  检查逻辑固化; sh 入口转调 python3（iSH ash 循环+grep 挂死怪癖绕行）
+
+---
 ## [1.7.3] - 2026-10-25
 
 ### ★ ci.sh 第⑥段: 双仓一致性检查 (用户提问驱动 — "会不会只更新一边漏另一边")
