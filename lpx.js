@@ -271,10 +271,38 @@ function parseRewriteRules(lines) {
   const out = [];
   for (const line of lines || []) {
     const m = /^(request|response)\s+if\s+(.+?)\s+then\s+(.+)$/is.exec(line);
-    if (m) out.push({ raw: line, phase: m[1], condition: m[2].trim(), action: m[3].trim(), legacy: false });
-    else out.push({ raw: line, phase: null, condition: null, action: line, legacy: true });
+    if (m) { out.push({ raw: line, phase: m[1], condition: m[2].trim(), action: m[3].trim(), legacy: false }); continue; }
+    // 旧语法（无阶段前缀）— 2026-10-26: 按 Loon 真机语义推断 phase，
+    // 否则 phase=null 会以「阶段不符」跳过 → sim 无法验证旧语法规则（真机 HAR 一直生效）
+    const ph = inferLegacyPhase(line);
+    const split = splitLegacyAction(line);
+    out.push({ raw: line, phase: ph, condition: split ? split.urlRx : null, action: split ? split.action : line.trim(), legacy: true, phaseInferred: ph !== null });
   }
   return out;
+}
+
+/** 旧语法动作 → 阶段推断（Loon 官方: mock-response-body/response-* = response, 其余 request） */
+
+/** 旧语法行 → [URL正则, 动作串] 切分（第一个非转义空格处切） */
+function splitLegacyAction(line) {
+  const t = String(line || '').trim();
+  for (let i = 1; i < t.length; i++) {
+    if (t.charCodeAt(i - 1) === 92) continue;      // 92 = 反斜杠（转义字符跳过）
+    if (t.charCodeAt(i) !== 32) continue;          // 32 = 空格
+    const urlRx = t.slice(0, i), rest = t.slice(i + 1).trim();
+    if (rest) return { urlRx, action: rest };
+  }
+  return null;
+}
+
+function inferLegacyPhase(line) {
+  const m = /^\S+\s+(\S+)/.exec(String(line || '').trim());
+  const act = (m ? m[1] : '').toLowerCase();
+  if (/^(mock-response-body|response-body-|response-header-)/.test(act)) return 'response';
+  if (/^(mock-request-body|request-body-|request-header-)/.test(act)) return 'request';
+  // reject 系列: 双向动作, Loon 在 request 阶段即终止 → request
+  if (/^(reject|reject-|header |302|307)/.test(act)) return 'request';
+  return null;
 }
 
 /** 解析 [Rule] */

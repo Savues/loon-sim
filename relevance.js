@@ -8,9 +8,11 @@
 
 function hostOf(url) { try { return new URL(url).hostname; } catch { return ''; } }
 
-/** 把 (?:a|b) 分组展开成多个候选 */
+/** 把 (?:a|b) / (a|b) 分组展开成多个候选（捕获组与非捕获组同权 — 2026-10-26:
+ *  此前只认 (?:...)，(grpc\.biliapi\.net|app\.bili...) 被整段粘连成一个假 host，
+ *  规则被误判「不相关」静默隐藏（四合一 16 条 Rewrite 全部中招） */
 function expand(part) {
-  const m = /^(.*?)\(\?:([^)]*)\)(.*)$/.exec(part);
+  const m = /^(.*?)\((?:\?:)?([^)]*)\)(.*)$/.exec(part);
   if (!m) return [part];
   const [, pre, alts, post] = m;
   return alts.split('|').flatMap(a => expand(pre + a + post));

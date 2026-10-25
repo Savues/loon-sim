@@ -33,24 +33,42 @@ function traceRewriteRules(lpx, url, phase, argValues, body) {
   const sharedState = { url, headers: {}, respHeaders: {}, status: 200, body: body !== undefined ? body : null };
   // v1.6.5: 条件求值并入插件参数 (Rewrite v2 条件式支持 ${参数} — 与 Script 段同款, v1.6.2 修Script时漏了此处)
   for (const r of lpx.rewriteRules || []) {
+    // 旧语法: raw = "URL正则 动作…"（URL 与动作同段）; 新语法: condition/action 分离
+    const legacyRx = r.legacy ? /^(\S+(?:\\\S)*?)\s+(\S.*)$/.exec(String(r.raw || '').trim()) : null;
+    const legacyUrlRx = legacyRx ? legacyRx[1] : null;
     const rec = { raw: r.raw, phase: r.phase, cond: r.condition, action: r.action };
-    rec.relevant = isRelevant(r.condition, url);
+    rec.relevant = isRelevant(r.condition || legacyUrlRx, url);
     // 阶段不符
     if (r.phase !== phase) { rec.result = 'skip'; rec.reason = `阶段不符（规则=${r.phase}，当前=${phase}）`; out.push(rec); continue; }
-    // 条件求值 (as 捕获写入 vars; 参数并入 — 条件式 Rewrite 可引用插件参数)
+    // 条件求值: 旧语法 = URL 正则直接匹配; 新语法 = 条件表达式 (as 捕获写入 vars; 参数并入)
     const vars = { url, ...(argValues || {}) };
-    const v = evalCondSafe(r.condition, vars);
+    let v;
+    if (r.legacy) {
+      try { v = legacyUrlRx ? new RegExp(legacyUrlRx).test(url) : false; }
+      catch (e) { v = false; rec.rxError = e.message; }
+    } else {
+      v = evalCondSafe(r.condition, vars);
+    }
     if (v === true) { rec.result = 'match'; }
     else { rec.result = 'no'; rec.reason = '条件不成立'; }
+    // 真实执行 Action: 旧语法动作 → 官方 converter 即时转新语法再执行
+    let execAction = r.action;
+    if (v === true && r.legacy && execAction) {
+      try {
+        const cvt = require('./converter').convertLine(r.raw, 'rewrite');
+        if (cvt.status === 'converted') execAction = cvt.text.split(' then ').slice(1).join(' then ');
+        else rec.exec = [{ name: r.action, ok: false, error: 'legacy converter: ' + cvt.status }];
+      } catch (e) { rec.exec = [{ name: r.action, ok: false, error: 'legacy converter: ' + e.message }]; }
+    }
     // 真实执行 Action (rewrite-exec): 同阶段所有命中的规则都执行 (官方语义)
-    if (v === true && r.action) {
+    if (v === true && execAction) {
       try {
         const { execRewrite } = require('./rewrite-exec');
         const st = sharedState;
-        const exec = execRewrite(st, r.action, vars);
+        const exec = execRewrite(st, execAction, vars);
         rec.exec = exec.actions.map(a => ({ name: a.name, ok: a.ok, error: a.error }));
         rec.terminated = exec.terminated;
-      } catch (e) { rec.exec = [{ name: r.action, ok: false, error: e.message }]; }
+      } catch (e) { rec.exec = [{ name: String(execAction).slice(0, 60), ok: false, error: e.message }]; }
     }
     // 动作类型
     rec.terminating = /reject|redirect|mock/i.test(r.action || '') || rec.terminated;
