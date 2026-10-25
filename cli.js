@@ -235,6 +235,27 @@ function cmdCheck() {
     }
   }
 
+  // 脚本 $done 调用检查 (残废脚本防线: 2026-10-25 horn_clean 事故 — 数组被截只剩定义, check过但真机死)
+  for (const r of p.scriptRules) {
+    const src = String(r.raw || '');
+    const m = /script\(["']([^"']+)["']/.exec(src);
+    if (!m) continue;
+    let local = m[1];
+    if (local.includes('githubusercontent.com')) {
+      local = local.replace(/^https?:\/\/raw\.githubusercontent\.com\/[^/]+\/[^/]+\/main\//, '').replace(/^https?:\/\/[^/]+\//, '');
+      for (const base of [lpxPath + '/../../..', lpxPath + '/..', '.']) {
+        const cand = require('path').resolve(base, local);
+        if (require('fs').existsSync(cand)) { local = cand; break; }
+      }
+    }
+    if (!require('fs').existsSync(local)) continue;
+    const js = require('fs').readFileSync(local, 'utf8');
+    if (!js.includes('$done')) {
+      console.log(`❌ 脚本无 $done 调用 (真机将等待超时): ${require('path').basename(local)}`);
+      errs++;
+    }
+  }
+
   // 正则字面量闭合校验 (~= /re/ 必须以 / 或 /flags 结束 — 不闭合则规则永不匹配)
   // 2026-10-24 探针穿透事故驱动: probe-setup 曾生成无尾斜杠正则
   for (const r of [...p.scriptRules, ...p.rewriteRules]) {
