@@ -3,6 +3,27 @@
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ---
+## [1.7.6] - 2026-10-26
+
+### ★ selftest 修复 cwd 依赖 — 之前所有「环境抖动」假象的真因
+
+- **症状**: 从仓库根（或任意非 `tools/loon-sim` 目录）跑 selftest，稳定 4 项失败：
+  `Rewrite 多规则共享 state` / `check: timeout=0 检出` / `dead-fn: 孤儿函数检出` / `dead-fn: 混淆函数名豁免`
+  从 `tools/loon-sim/` 目录跑则 80/0 全绿
+- **根因**: 这 4 个用例用 `execSync('node cli.js …')` / `execSync('node dead-fn.js …')` 调子进程，
+  **相对路径不加 `cwd`** → 父进程 cwd 不是 sim 目录时 `cli.js`/`dead-fn.js` 找不到 →
+  子进程报错、stdout 为空 → 断言失败
+- **误判史**: 该现象从 v1.6.x 起多次被当作「iSH 进程环境抖动」，处理方式是「复跑即绿」——
+  实际只是当时恰好从 sim 目录跑。本次换设备后从仓库根跑，连续 5 次全红才暴露
+- **修复**: 4 处 `execSync` 全部改为 `node "${__dirname}/cli.js"` + `{cwd: __dirname}`
+- **验证**: cwd = 仓库根 / `tools/loon-sim` / `plugins` 三处均 **80 通过 0 失败**
+
+### 教训
+
+「随机失败、复跑即绿」不要直接归因环境。先确认**执行 cwd 是否一致** — 相对路径调子进程的用例
+对 cwd 敏感，而这类失败的表现（同一批用例、每次相同）与真抖动（随机分布）可区分。
+
+---
 ## [1.7.5] - 2026-10-26
 
 ### ★ check 新增「探针变量形态」校验 (双花括号 `${{url}}`)

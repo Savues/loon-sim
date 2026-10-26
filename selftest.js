@@ -390,7 +390,7 @@ tExec('Rewrite 多规则共享 state (前者输出=后者输入)', () => {
   // 白盒: traceRewriteRules 不导出 state — 用 exec 验证 2 条都执行即可 (state 正确性由覆盖顺序保证)
   const { execSync } = require('child_process');
   let out = '';
-  try { out = execSync('node cli.js run /tmp/st_rw.lpx --url https://t.com/x --phase request', {encoding: 'utf8', stdio: 'pipe'}); }
+  try { out = execSync(`node "${__dirname}/cli.js" run /tmp/st_rw.lpx --url https://t.com/x --phase request`, {encoding: 'utf8', stdio: 'pipe', cwd: __dirname}); }
   catch (e) { out = (e.stdout || '') + (e.stderr || ''); }
   assert.strictEqual((out.match(/← 命中/g) || []).length, 2, '两条都执行');
 });
@@ -419,7 +419,7 @@ tExec('check: timeout=0 检出 / timeout={n} 合法', () => {
   const fs = require('fs');
   const { execSync } = require('child_process');
   fs.writeFileSync('/tmp/st_t1.lpx', '#!name=T\n#!version=1\n[Script]\nrequest if ${url} ~= /a/ then script("a.js") with timeout=0\n');
-  let out = ''; try { out = execSync('node cli.js check /tmp/st_t1.lpx', {encoding:'utf8'}); } catch(e) { out = e.stdout || ''; }
+  let out = ''; try { out = execSync(`node "${__dirname}/cli.js" check /tmp/st_t1.lpx`, {encoding:'utf8', cwd: __dirname}); } catch(e) { out = e.stdout || ''; }
   assert.ok(out.includes('timeout=0 非法'), '应检出');
 });
 
@@ -446,7 +446,7 @@ tExec('含下划线的 enable 引用不算死参数', () => {
   fs.writeFileSync('/tmp/st_us.lpx', '#!name=T\n#!version=1\n[Argument]\nmy_switch_key = switch,true\n[Script]\nhttp-response ^https://x script-path=a.js, enable={my_switch_key}\n');
   const { execSync } = require('child_process');
   let out = '';
-  try { out = execSync('node cli.js check /tmp/st_us.lpx', {encoding:'utf8'}); } catch (e) { out = e.stdout || ''; }
+  try { out = execSync(`node "${__dirname}/cli.js" check /tmp/st_us.lpx`, {encoding:'utf8', cwd: __dirname}); } catch (e) { out = e.stdout || ''; }
   assert.ok(!out.includes('my_switch_key') || !out.includes('死参数'), '含下划线参数不应误报死参数');
 });
 
@@ -456,7 +456,7 @@ tExec('dead-fn: 孤儿函数检出 + 正常函数不误报', () => {
   fs.writeFileSync('/tmp/st_dead.js', 'function main(){ helper1(); }\nfunction helper1(){ return 1; }\nfunction orphan(){ return 2; }\n');
   const { execSync } = require('child_process');
   let out = '';
-  try { out = execSync('node dead-fn.js /tmp/st_dead.js', {encoding:'utf8'}); } catch (e) { out = e.stdout || ''; }
+  try { out = execSync(`node "${__dirname}/dead-fn.js" /tmp/st_dead.js`, {encoding:'utf8', cwd: __dirname}); } catch (e) { out = e.stdout || ''; }
   assert.ok(out.includes('orphan'), '应检出 orphan');
   assert.ok(!out.includes('helper1'), 'helper1 被调用不应误报');
 });
@@ -465,7 +465,7 @@ tExec('dead-fn: 混淆函数名豁免', () => {
   fs.writeFileSync('/tmp/st_dead2.js', 'function a0_0xabcd(){return 1;}\n');
   const { execSync } = require('child_process');
   let out = '';
-  try { out = execSync('node dead-fn.js /tmp/st_dead2.js', {encoding:'utf8'}); } catch (e) { out = (e.stdout||'') + (e.stderr||''); }
+  try { out = execSync(`node "${__dirname}/dead-fn.js" /tmp/st_dead2.js`, {encoding:"utf8", cwd: __dirname}); } catch (e) { out = (e.stdout||'') + (e.stderr||''); }
   assert.ok(out.includes('死代码: 无'), '混淆名应豁免: ' + out.slice(0,80));
 });
 
