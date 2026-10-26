@@ -3,6 +3,78 @@
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ---
+## [1.7.7] - 2026-10-27
+
+### ★ check 新增两项「真机兼容性」校验 — 专治「模拟器绿、真机红」
+
+两次真机事故的共同点：**`loon-sim` 全绿，但规则在真实 Loon 上完全不工作**。
+根因是模拟器比真实 Loon 宽容 —— 它会正确解析真实 Loon 拒绝的写法。
+本次把这两类差异固化为静态检查。
+
+#### ① `json.replace` 值类型校验
+
+| 形态 | 真实 Loon 行为 | 模拟器旧行为 | 新检查 |
+|---|---|---|---|
+| `json.replace("k", [])` | **静默失败**（不报错、不写日志） | ✅ 正确解析为数组 | ⚠️ 警告 |
+| `json.replace("k", {})` / `null` | 同上 | ✅ 正确解析 | ⚠️ 警告 |
+| `json.replace(["a","b"], ["[]","{}"])` | 写入**字符串**而非容器 | ✅ 正确解析 | ❌ 错误 |
+
+- **事故背景**：RedPaper v1.4.0 的 `json.replace("data.placeholder", [])` 在真机不生效，
+  placeholder 仍 790B（规则生效应为 173B）。仓库里真机验证通过的 `json.replace` 全是数字参数
+  （SMZDM `[0,0]`、JD `[0,0,0]`），空容器写法从未被验证。
+- **提示语**：建议改用 `delete`（单参数动作，已验证可靠）
+- **实现**：`cli.js` `cmdCheck()` 3b 段。批量值正则不能用 `[^\]]*` —— 值列表里的 `"[]"`
+  字面量会在首个 `]` 处截断，改为引号感知匹配 `(?:"[^"]*"|'[^']*'|`[^`]*`|\s|,)*`
+
+#### ② `reject_*` 与目标资源类型匹配校验
+
+| 目标 | 禁用 | 原因 |
+|---|---|---|
+| `.zip` | `reject_img` / `reject_video` | App 拿到 GIF 占位图 → 解压失败 |
+| `.mp4` / `.m3u8` | `reject_img` / `reject_dict` / `reject_array` | 播放器/解析器拿到错误内容 |
+| `.png` / `.jpg` / `.webp` / `.gif` | `reject_video` / `reject_dict` / `reject_array` | 图片解码失败 |
+
+- **事故背景**：RedPaper v1.4.0/1.4.1 用 `reject_img(200)` 拦
+  `fe-static.xhscdn.com/xhs-dsl/search_recommend_trending/`（实际是 **zip 模板包**），
+  真机每次打开搜索框都提示「网络不太顺畅，请检查网络设置」。
+  日志铁证：`[DslJsRuntime] downloadJs failed, cannot open zip file`。
+- **无后缀场景**：模板 URL 常写成目录前缀（`/xhs-dsl/xxx/`），规则里看不到 `.zip`。
+  新增 `PATH_TYPE_HINT` 按路径特征推断目标类型：
+  - `/xhs-dsl|\/dsl\/|template|\.zip/` → 视为 zip
+  - `/hera\/|\/stream\/|\.mp4|video\//` → 视为 mp4
+- **实现**：`cli.js` `cmdCheck()` 3c 段
+
+### 回归验证
+
+用两次真机事故的**原始规则**构造测试文件：
+
+```
+/tmp/test-jsonreplace.lpx   → 1 错误 1 警告（两个事故形态全部检出）
+/tmp/test-reject.lpx        → 2 错误（zip 路径推断 + mp4 后缀，全部检出）
+```
+
+现有插件无误报：
+
+```
+全 37 个插件 check 扫描 → 0 个出现新错误
+selftest               → 80 通过 0 失败
+ci.sh                  → 全绿（③ 0错误 37 / ④ 一致 37）
+```
+
+### 教训
+
+**「模拟器通过」只是必要条件，不是充分条件。**
+模拟器能保证语法正确、URL 匹配、Action 能执行，
+但**无法保证真实 Loon 的参数解析行为一致**。
+
+凡是涉及以下写法，模拟器通过后仍必须真机验证（看响应字节数是否变化）：
+- `json.replace` 的值参数（尤其空容器 / 复杂类型）
+- `reject_*` 拦截二进制资源（zip / 视频 / 图片）
+
+本次新增的两项检查，就是把这两类「模拟器测不出的坑」固化成静态规则，
+让下次踩坑前就能被拦住。
+
+---
 ## [1.7.6] - 2026-10-26
 
 ### ★ selftest 修复 cwd 依赖 — 之前所有「环境抖动」假象的真因

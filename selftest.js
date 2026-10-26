@@ -450,8 +450,7 @@ tExec('含下划线的 enable 引用不算死参数', () => {
   assert.ok(!out.includes('my_switch_key') || !out.includes('死参数'), '含下划线参数不应误报死参数');
 });
 
-console.log('⑯ 死代码检测器 (v1.6.7)');
-tExec('dead-fn: 孤儿函数检出 + 正常函数不误报', () => {
+console.log('⑯ 死代码检测器 (v1.6.7)');tExec('dead-fn: 孤儿函数检出 + 正常函数不误报', () => {
   const fs = require('fs');
   fs.writeFileSync('/tmp/st_dead.js', 'function main(){ helper1(); }\nfunction helper1(){ return 1; }\nfunction orphan(){ return 2; }\n');
   const { execSync } = require('child_process');
@@ -494,6 +493,58 @@ t('check: 探针变量双花括号检出 (f-string 转义残留, 2026-10-26 事�
   assert.strictEqual(chk(bad), true, '双花括号应被检出');
   assert.strictEqual(chk(good), false, '正确形态不应误报');
   assert.ok(!parseLpx(bad).header.version || true);
+});
+
+console.log('⑰ json.replace 值类型校验 (v1.7.7)');
+tExec('json.replace 传空容器应告警', () => {
+  const fs = require('fs');
+  fs.writeFileSync('/tmp/st_jr.lpx', '#!name=T\n#!version=1\n[MitM]\nhostname=a.com\n[Rewrite]\nresponse if ${url} ~= /^https:\\/\\/a\\.com\\/x/i then response.json.replace("data.p", [])\n');
+  const { execSync } = require('child_process');
+  let out = '';
+  try { out = execSync(`node "${__dirname}/cli.js" check /tmp/st_jr.lpx`, {encoding:'utf8', cwd: __dirname}); } catch (e) { out = e.stdout || ''; }
+  assert.ok(out.includes('空容器'), '应检出空容器值: ' + out.slice(0,120));
+});
+tExec('json.replace 批量传字符串空容器应报错', () => {
+  const fs = require('fs');
+  fs.writeFileSync('/tmp/st_jr2.lpx', '#!name=T\n#!version=1\n[MitM]\nhostname=a.com\n[Rewrite]\nresponse if ${url} ~= /^https:\\/\\/a\\.com\\/y/i then response.json.replace(["a.q","a.h"], ["[]","{}"])\n');
+  const { execSync } = require('child_process');
+  let out = '';
+  try { out = execSync(`node "${__dirname}/cli.js" check /tmp/st_jr2.lpx`, {encoding:'utf8', cwd: __dirname}); } catch (e) { out = e.stdout || ''; }
+  assert.ok(out.includes('字符串空容器'), '应检出批量字符串空容器: ' + out.slice(0,120));
+});
+tExec('json.replace 数字值 / delete 不应误报', () => {
+  const fs = require('fs');
+  fs.writeFileSync('/tmp/st_jr3.lpx', '#!name=T\n#!version=1\n[MitM]\nhostname=a.com\n[Rewrite]\nresponse if ${url} ~= /^https:\\/\\/a\\.com\\/z/i then response.json.replace(["a.b"], [0])\nresponse if ${url} ~= /^https:\\/\\/a\\.com\\/w/i then response.json.delete("a.c")\n');
+  const { execSync } = require('child_process');
+  let out = '';
+  try { out = execSync(`node "${__dirname}/cli.js" check /tmp/st_jr3.lpx`, {encoding:'utf8', cwd: __dirname}); } catch (e) { out = e.stdout || ''; }
+  assert.ok(!out.includes('空容器'), '数字值/delete 不应误报: ' + out.slice(0,120));
+});
+
+console.log('⑱ reject 与目标资源类型匹配 (v1.7.7)');
+tExec('reject_img 拦 .zip 应报错', () => {
+  const fs = require('fs');
+  fs.writeFileSync('/tmp/st_rj.lpx', '#!name=T\n#!version=1\n[MitM]\nhostname=a.com\n[Rewrite]\nrequest if ${url} ~= /^https:\\/\\/a\\.com\\/pkg\\.zip/i then reject_img(200)\n');
+  const { execSync } = require('child_process');
+  let out = '';
+  try { out = execSync(`node "${__dirname}/cli.js" check /tmp/st_rj.lpx`, {encoding:'utf8', cwd: __dirname}); } catch (e) { out = e.stdout || ''; }
+  assert.ok(out.includes('.zip'), '应检出 zip + reject_img: ' + out.slice(0,120));
+});
+tExec('reject_img 拦 xhs-dsl 目录路径应报错(无后缀推断)', () => {
+  const fs = require('fs');
+  fs.writeFileSync('/tmp/st_rj2.lpx', '#!name=T\n#!version=1\n[MitM]\nhostname=a.com\n[Rewrite]\nrequest if ${url} ~= /^https:\\/\\/a\\.com\\/xhs-dsl\\/tpl\\//i then reject_img(200)\n');
+  const { execSync } = require('child_process');
+  let out = '';
+  try { out = execSync(`node "${__dirname}/cli.js" check /tmp/st_rj2.lpx`, {encoding:'utf8', cwd: __dirname}); } catch (e) { out = e.stdout || ''; }
+  assert.ok(out.includes('疑似'), '应按路径特征推断为 zip: ' + out.slice(0,120));
+});
+tExec('reject_img 拦图片 / reject_dict 拦 API 不应误报', () => {
+  const fs = require('fs');
+  fs.writeFileSync('/tmp/st_rj3.lpx', '#!name=T\n#!version=1\n[MitM]\nhostname=a.com\n[Rewrite]\nrequest if ${url} ~= /^https:\\/\\/a\\.com\\/p\\.png/i then reject_img(200)\nrequest if ${url} ~= /^https:\\/\\/a\\.com\\/api\\/x/i then reject_dict(200)\n');
+  const { execSync } = require('child_process');
+  let out = '';
+  try { out = execSync(`node "${__dirname}/cli.js" check /tmp/st_rj3.lpx`, {encoding:'utf8', cwd: __dirname}); } catch (e) { out = e.stdout || ''; }
+  assert.ok(!out.includes('不匹配') && !out.includes('疑似'), '正确类型不应误报: ' + out.slice(0,120));
 });
 
 console.log(`\n结果: ${pass} 通过, ${fail} 失败${skipped ? ' · ' + skipped + ' 跳过(iSH嵌套不可用)' : ''}`);

@@ -98,6 +98,76 @@ function cmdCheck() {
     if (/\|\s*enable\s*=/.test(r.action)) { console.log(`❌ [Rewrite] 含 enable= : ${r.raw.slice(0, 70)}`); errs++; }
   }
 
+  // 3b) [Rewrite] json.replace 值类型校验 (v1.7.7)
+  //     真实 Loon 对空容器值解析失败且静默跳过 —— 模拟器 evalArg 会正确解析，故必须静态拦
+  for (const r of p.rewriteRules) {
+    if (r.legacy) continue;
+    const act = r.action || '';
+    if (!/json\.replace\(/.test(act)) continue;
+    // 单条形态: json.replace("path", []) / {} / null
+    const m1 = /json\.replace\(\s*(?:"[^"]*"|'[^']*')\s*,\s*(\[\]|\{\}|null)\s*\)/.exec(act);
+    if (m1) {
+      console.log(`⚠️  json.replace 值参数传空容器 "${m1[1]}" — 真实 Loon 会静默失败，建议改用 delete: ${r.raw.slice(0, 70)}`);
+      warns++;
+      continue;
+    }
+    // 批量形态: json.replace(["a","b"], ["[]","{}"]) — 值是字符串而非容器
+    // 注意: 值列表里含 "[]" 字面量, 不能用 [^\]]* 匹配(会在首个 ] 处截断)
+    const m2 = /json\.replace\(\s*\[[^\]]*\]\s*,\s*\[((?:"[^"]*"|'[^']*'|`[^`]*`|\s|,)*)\]/.exec(act);
+    if (m2) {
+      const vals = m2[1].split(',').map(s => s.trim()).filter(Boolean);
+      const strEmpty = vals.filter(v => /^["'`]\s*(\[\]|\{\}|null)\s*["'`]$/.test(v));
+      if (strEmpty.length) {
+        console.log(`❌ json.replace 批量值传字符串空容器 ${JSON.stringify(strEmpty)} — 会写入字符串而非数组/对象: ${r.raw.slice(0, 70)}`);
+        errs++;
+      }
+    }
+  }
+
+  // 3c) [Rewrite] reject_* 与目标资源类型匹配校验 (v1.7.7)
+  //     拦截二进制资源时占位类型必须与目标一致, 否则 App 解析失败 → 用户可见报错
+  //     事故: reject_img(200) 拦 .zip 模板包 → [DslJsRuntime] downloadJs failed, cannot open zip file
+  const REJECT_MISMATCH = {
+    // 目标后缀 → 不能用的 reject 类型（占位内容类型与目标不符）
+    'zip':   ['reject_img', 'reject_video'],
+    'mp4':   ['reject_img', 'reject_dict', 'reject_array'],
+    'm3u8':  ['reject_img', 'reject_dict', 'reject_array'],
+    'png':   ['reject_video', 'reject_dict', 'reject_array'],
+    'jpg':   ['reject_video', 'reject_dict', 'reject_array'],
+    'jpeg':  ['reject_video', 'reject_dict', 'reject_array'],
+    'webp':  ['reject_video', 'reject_dict', 'reject_array'],
+    'gif':   ['reject_video', 'reject_dict', 'reject_array'],
+  };
+  // 路径特征 → 推测目标类型（URL 无后缀但路径能判断的场景）
+  const PATH_TYPE_HINT = [
+    { re: /xhs-dsl|\/dsl\/|template|\.zip/i, type: 'zip' },
+    { re: /\/hera\/|\/stream\/|\.mp4|video\//i, type: 'mp4' },
+  ];
+  for (const r of p.rewriteRules) {
+    if (r.legacy) continue;
+    const act = r.action || '';
+    const mk = /(reject_(?:img|video|dict|array))/.exec(act);
+    if (!mk) continue;
+    const kind = mk[1];
+    const cond = r.condition || '';
+    let matched = false;
+    // a) 条件里显式带后缀
+    for (const [ext, badKinds] of Object.entries(REJECT_MISMATCH)) {
+      if (!badKinds.includes(kind)) continue;
+      if (!new RegExp('\\\\*\\\\.?' + ext + '(?![a-z0-9])', 'i').test(cond)) continue;
+      console.log(`❌ ${kind} 用于 .${ext} 资源 — 占位内容类型不匹配会导致 App 解析失败: ${r.raw.slice(0, 70)}`);
+      errs++; matched = true; break;
+    }
+    if (matched) continue;
+    // b) 无后缀但路径特征可判断（如模板目录 /xhs-dsl/xxx/ 下载的是 zip）
+    for (const h of PATH_TYPE_HINT) {
+      if (!h.re.test(cond)) continue;
+      if (!REJECT_MISMATCH[h.type].includes(kind)) continue;
+      console.log(`❌ ${kind} 用于疑似 .${h.type} 资源（路径特征 "${h.re.source.slice(0, 20)}…"）— 占位类型不匹配会导致解析失败: ${r.raw.slice(0, 70)}`);
+      errs++; break;
+    }
+  }
+
   // 4) [Script] with 字段白名单（官方 7 个）
   const WITH_FIELDS = new Set(['enable', 'tag', 'img_url', 'timeout', 'debug', 'requires_body', 'binary_body_mode']);
   const LEGACY_WITH = new Set(['img-url', 'requires-body', 'binary-body-mode']); // 旧语法字段, legacy 规则专用
