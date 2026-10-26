@@ -476,5 +476,25 @@ t('check: 正则字面量未闭合检出 (probe-setup事故类, 进程内验证)
   assert.ok(parseRegex('/gw/loon-sim\\.probe\\.name/i') instanceof RegExp, '带 /i 应可解析');
 });
 
+t('check: 探针变量双花括号检出 (f-string 转义残留, 2026-10-26 事故)', () => {
+  // Allinone v8.0.1 的探针写成 ${{url}} → Loon 只认 ${url} → 探针永不匹配,
+  // 但彼时 check 无此项校验 + 探针校验被 `有 #!version` 开关挡住 → 一路通过所有自动化
+  const fs = require('fs');
+  const bad = '/tmp/st_probe_bad.lpx', good = '/tmp/st_probe_good.lpx';
+  const mk = (u) => `#!name=T\n#!version=1.0\n[Rule]\nDOMAIN,t.com,REJECT\n[Rewrite]\nrequest if ${u} ~= /^https?:\\/\\/t\\.com\\/gw\\/loon-sim\\.probe\\/t_p/i then reject(200, "1.0")\n[Mitm]\nhostname = t.com\n`;
+  fs.writeFileSync(bad, mk('${{url}}'));
+  fs.writeFileSync(good, mk('${url}'));
+  const { parseLpx } = require('./lpx');
+  const chk = (f) => {
+    const p = parseLpx(f);
+    // 与 cli.js check ⑤ 同源: 探针规则里出现 ${{ 即错误
+    const probes = [...p.scriptRules, ...p.rewriteRules].filter(r => /loon-sim.{0,3}probe/.test(String(r.condition || r.raw || '')));
+    return probes.some(r => /\$\{\{/.test(String(r.raw || '')));
+  };
+  assert.strictEqual(chk(bad), true, '双花括号应被检出');
+  assert.strictEqual(chk(good), false, '正确形态不应误报');
+  assert.ok(!parseLpx(bad).header.version || true);
+});
+
 console.log(`\n结果: ${pass} 通过, ${fail} 失败${skipped ? ' · ' + skipped + ' 跳过(iSH嵌套不可用)' : ''}`);
 if (fail) { console.log('\n失败项:'); failures.forEach(f => console.log('  ✗ ' + f)); process.exit(1); }

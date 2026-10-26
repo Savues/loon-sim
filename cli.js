@@ -177,13 +177,25 @@ function cmdCheck() {
   }
 
   // 探针一致性检查 (2026-10-24 探针事故三连驱动: 缺尾斜杠/版本不同步/订阅延迟误判)
+  // 2026-10-26 甲: 开关从 `有 #!version` 改为 `存在探针规则` — 否则没写 #!version 的插件整段跳过校验
+  //   (Allinone v8.0.1 的探针语法错误 `${{url}}` 就是这样逃过所有自动化的)
   const ver = lpx.header?.version;
-  if (ver) {
+  {
     const probeRules = [...p.scriptRules, ...p.rewriteRules].filter(r => /loon-sim.{0,3}probe/.test(String(r.condition || r.raw || '')));
     if (probeRules.length === 0) {
-      console.log(`⚠️ 有 #!version=${ver} 但未埋版本探针 — version-probe.sh 无法验证设备版本 (跑 probe-setup.py 埋入)`);
-      warns++;
+      if (ver) {
+        console.log(`⚠️ 有 #!version=${ver} 但未埋版本探针 — version-probe.sh 无法验证设备版本 (跑 probe-setup.py 埋入)`);
+        warns++;
+      }
     } else {
+      // ⑤ 探针变量形态: ${{...}} 是 f-string 转义残留, Loon 不认 → 探针永不匹配 (2026-10-26 实证)
+      for (const r of probeRules) {
+        const raw0 = String(r.raw || '');
+        if (/\$\{\{/.test(raw0)) {
+          console.log(`❌ 探针变量写成 \${{...}}（双花括号）—— Loon 只认 \${...}；该探针永不匹配 (f-string 转义残留): ${raw0.slice(0, 70)}`);
+          errs++;
+        }
+      }
       const mainProbes = [];
       for (const r of probeRules) {
         const raw = String(r.raw || '');
@@ -209,7 +221,7 @@ function cmdCheck() {
         if (!m) {
           console.log(`❌ 探针必须用 reject(200, "版本号") 双参形态: ${raw.slice(-50)}`);
           errs++;
-        } else if (m[1] !== ver) {
+        } else if (ver && m[1] !== ver) {
           console.log(`❌ 探针版本 "${m[1]}" ≠ #!version ${ver} — 版本未同步 (重跑 probe-setup.py)`);
           errs++;
         }
