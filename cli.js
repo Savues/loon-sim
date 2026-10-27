@@ -514,8 +514,18 @@ function buildArgument(r) {
 
 function loadAllowNet() {
   const i = process.argv.indexOf('--allow-net');
-  if (i < 0 || !process.argv[i + 1]) return null;
-  return process.argv[i + 1].split(',').map(x => x.trim()).filter(Boolean);
+  if (i < 0) return null;
+  const val = process.argv[i + 1];
+  // v1.7.8：不带值时【显式报错】而不是静默降级为 simulated。
+  // 旧行为让 `--allow-net`（当成布尔开关用）悄悄退回 mock 模式，
+  // 表现为「明明加了 allow-net 却报 未开启 --allow-net」，极易误判成模拟器不支持真实网络。
+  if (!val || val.startsWith('--')) {
+    console.error('\n❌ --allow-net 需要一个域名列表（逗号分隔），例如：');
+    console.error('     --allow-net api.example.com');
+    console.error('     --allow-net api.example.com,cdn.example.com\n');
+    process.exit(2);
+  }
+  return val.split(',').map(x => x.trim()).filter(Boolean);
 }
 
 function loadMocks() {

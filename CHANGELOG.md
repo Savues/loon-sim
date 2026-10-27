@@ -3,6 +3,63 @@
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ---
+## [1.7.8] - 2026-10-28
+
+### `--allow-net` 不带值时显式报错，不再静默降级
+
+**事故背景**（PinDuoDuo 佣金功能排查，2026-10-27）
+
+要验证脚本里的大淘客请求，按名字直觉写成：
+
+```bash
+node cli.js run plugin.lpx --url ... --allow-net
+```
+
+输出：
+
+```
+[httpClient] POST https://dtkapi.ffquan.cn/... (simulated, 未开启 --allow-net)
+```
+
+明明加了 `--allow-net` 却提示「未开启」——因为 `loadAllowNet()` 的判断是：
+
+```js
+if (i < 0 || !process.argv[i + 1]) return null;   // 不带值 → null → 静默退回 mock
+```
+
+参数名像布尔开关，实际要传域名列表。**不带值时不报错、不提示用法**，很容易误判成
+「模拟器不支持真实网络」，从而绕开模拟器去手写 harness。
+
+#### 改动
+
+`cli.js` `loadAllowNet()`：
+
+| 情况 | 旧行为 | 新行为 |
+|---|---|---|
+| 未传 `--allow-net` | `null`（mock 模式） | 不变 |
+| 传了但不带值 | **静默 `null`** | **stderr 打印用法 + `exit(2)`** |
+| 传了 `--allow-net --verbose`（下一项是另一个参数） | 把 `--verbose` 当域名 | 同样按「不带值」报错 |
+| 传了 `--allow-net a.com,b.com` | 正常 | 不变 |
+
+报错文案：
+
+```
+❌ --allow-net 需要一个域名列表（逗号分隔），例如：
+     --allow-net api.example.com
+     --allow-net api.example.com,cdn.example.com
+```
+
+#### 验证
+
+```bash
+U="https://api.pinduoduo.com/api/alexa/cells/hub/v3?x=1"
+node cli.js run plugin.lpx --url "$U" --response-file f.json --allow-net        # exit=2 ✅
+node cli.js run plugin.lpx --url "$U" --response-file f.json --allow-net a.com  # 正常执行
+```
+
+`ci.sh` 86 自测 / 38 插件 check / parity 全绿。
+
+---
 ## [1.7.7] - 2026-10-27
 
 ### ★ check 新增两项「真机兼容性」校验 — 专治「模拟器绿、真机红」
