@@ -28,6 +28,11 @@ function createRuntime(o = {}) {
   const $scriptStartTime = Date.now();
   let done = null;
   let doneCalled = false;
+  // v1.7.9：异步支持。$done 由回调触发时，runAsync() 需要能等到它。
+  let httpCalls = 0;                       // $httpClient 调用次数（决定是否值得等）
+  let timerCalls = 0;                      // setTimeout 调用次数（脚本可能靠它延后 $done）
+  let doneResolve = null;
+  const donePromise = new Promise((res) => { doneResolve = res; });
 
   const request = {
     url: o.request?.url || '',
@@ -81,7 +86,7 @@ function createRuntime(o = {}) {
     $request: request,
     $response: response,
     $argument: o.argument === undefined ? null : o.argument,
-    $done: (v) => { doneCalled = true; done = normalizeDone(v); },
+    $done: (v) => { doneCalled = true; done = normalizeDone(v); if (doneResolve) doneResolve(); },
     $notify: (...a) => { logs.push('[notify] ' + a.map(stringify).join(' | ')); },
     $notification: { post: (...a) => { logs.push('[notification] ' + a.map(stringify).join(' | ')); } },
     $persistentStore: storeApi,
@@ -133,15 +138,15 @@ function createRuntime(o = {}) {
       setRunningModel: () => true,
     },
     $httpClient: {
-      get: (a, cb) => httpReq('GET', a, cb, logs, httpMocks, allowNet),
-      post: (a, cb) => httpReq('POST', a, cb, logs, httpMocks, allowNet),
-      put: (a, cb) => httpReq('PUT', a, cb, logs, httpMocks, allowNet),
-      head: (a, cb) => httpReq('HEAD', a, cb, logs, httpMocks, allowNet),
-      delete: (a, cb) => httpReq('DELETE', a, cb, logs, httpMocks, allowNet),
+      get: (a, cb) => { httpCalls++; return httpReq('GET', a, cb, logs, httpMocks, allowNet); },
+      post: (a, cb) => { httpCalls++; return httpReq('POST', a, cb, logs, httpMocks, allowNet); },
+      put: (a, cb) => { httpCalls++; return httpReq('PUT', a, cb, logs, httpMocks, allowNet); },
+      head: (a, cb) => { httpCalls++; return httpReq('HEAD', a, cb, logs, httpMocks, allowNet); },
+      delete: (a, cb) => { httpCalls++; return httpReq('DELETE', a, cb, logs, httpMocks, allowNet); },
       // 兜底: 未定义方法也走 httpReq (官方支持 options/p TRACE 等冷门方法; 与其静默无回调, 不如统一处理)
-      options: (a, cb) => httpReq('OPTIONS', a, cb, logs, httpMocks, allowNet),
+      options: (a, cb) => { httpCalls++; return httpReq('OPTIONS', a, cb, logs, httpMocks, allowNet); },
     },
-    setTimeout,
+    setTimeout: (fn, ms, ...a) => { timerCalls++; return setTimeout(fn, ms, ...a); },
     setInterval,
     clearTimeout,
     clearInterval,
@@ -166,6 +171,38 @@ function createRuntime(o = {}) {
       } catch (e) {
         return { ok: false, error: e.message, logs, done, doneCalled };
       }
+      return { ok: true, logs, done, doneCalled };
+    },
+
+    // v1.7.9：异步版本。$done 常由 $httpClient 回调触发，run() 同步返回时
+    // doneCalled 必然还是 false（表现为「$done 未被调用」）。本方法会等。
+    //
+    // 等待策略：只有调用过 $httpClient 才等 —— 纯同步脚本（绝大多数去广告脚本）
+    // 走原路径零开销，不会拖慢全量 CI。
+    // 超时默认 3s（mock 走 setImmediate，毫秒级）；开了 --allow-net 提到 20s
+    // （runtime 内部 httpReq 自身 timeout 是 15s）。
+    async runAsync(scriptPath) {
+      let thrown = null;
+      try {
+        const code = fs.readFileSync(scriptPath, 'utf8');
+        const ctx = vm.createContext(sandbox);
+        const wrapped = '(function () {\n' + code + '\n})();';
+        vm.runInContext(wrapped, ctx, { filename: scriptPath, timeout: o.timeout || 20000 });
+      } catch (e) {
+        thrown = e;
+      }
+
+      if (!doneCalled && (httpCalls > 0 || timerCalls > 0)) {
+        const ms = o.asyncTimeout || (allowNet ? 20000 : 3000);
+        let timer = null;
+        await Promise.race([
+          donePromise,
+          new Promise((res) => { timer = setTimeout(res, ms); }),
+        ]);
+        if (timer) clearTimeout(timer);
+      }
+
+      if (thrown) return { ok: false, error: thrown.message, logs, done, doneCalled };
       return { ok: true, logs, done, doneCalled };
     },
   };

@@ -15,7 +15,15 @@ const fs = require('fs');
 
 let pass = 0, fail = 0, skipped = 0;
 const failures = [];
+// v1.7.9：用例支持 async（runAsync 要 await）。同步用例行为不变。
+const asyncCases = [];
 function t(name, fn) {
+  // async 用例（返回 Promise）先收集，等同步用例跑完再顺序 await ——
+  // 这样输出顺序与用例定义顺序一致，且不改变同步用例的执行时机。
+  if (fn && fn.constructor && fn.constructor.name === 'AsyncFunction') {
+    asyncCases.push({ name, fn });
+    return;
+  }
   try { fn(); pass++; }
   catch (e) { fail++; failures.push(`${name}\n    ${e.message.split('\n')[0]}`); }
 }
@@ -209,11 +217,45 @@ t('脚本异常被捕获', () => {
   assert.strictEqual(r.ok, false);
   assert.ok(r.error.includes('boom'));
 });
-t('异步 $done（setTimeout）', () => {
+t('异步 $done（setTimeout）', async () => {
   const f = '/tmp/_sim_t6.js';
   fs.writeFileSync(f, 'setTimeout(()=>$done({body:"later"}),10);');
-  const r = createRuntime({ response: { body: '' } }).run(f);
-  assert.strictEqual(r.doneCalled, false); // 同步执行阶段未调用（模拟器不等待异步）
+  // v1.7.9：runAsync 会等到 $done。旧断言 doneCalled===false 锁定的是
+  // 「模拟器不等待异步」这个缺陷，已随 runAsync 修正。
+  const r = await createRuntime({ response: { body: '' } }).runAsync(f);
+  assert.strictEqual(r.doneCalled, true, 'runAsync 应等到 $done');
+  assert.strictEqual(r.done.body, 'later');
+});
+t('runAsync 纯同步脚本零等待', async () => {
+  const f = '/tmp/_sim_t7.js';
+  fs.writeFileSync(f, '$done({body:"sync"});');
+  const t0 = Date.now();
+  const r = await createRuntime({ response: { body: '' } }).runAsync(f);
+  assert.strictEqual(r.done.body, 'sync');
+  assert.ok(Date.now() - t0 < 200, '同步脚本不应等待: ' + (Date.now() - t0) + 'ms');
+});
+t('runAsync 等 httpClient 回调', async () => {
+  const f = '/tmp/_sim_t8.js';
+  fs.writeFileSync(f, '$httpClient.get({url:"https://api.t.com/v1"},(e,r,b)=>{$done({body:"got:"+b});});');
+  const r = await createRuntime({ response: { body: '' }, httpMocks: { 'api.t.com': { status: 200, body: 'OK' } } }).runAsync(f);
+  assert.strictEqual(r.doneCalled, true);
+  assert.strictEqual(r.done.body, 'got:OK');
+});
+t('runAsync 无回调时按 asyncTimeout 返回', async () => {
+  const f = '/tmp/_sim_t9.js';
+  fs.writeFileSync(f, '$httpClient.get({url:"https://api.t.com/x"},()=>{});');
+  const t0 = Date.now();
+  const r = await createRuntime({ response: { body: '' }, asyncTimeout: 300 }).runAsync(f);
+  const ms = Date.now() - t0;
+  assert.strictEqual(r.doneCalled, false);
+  assert.ok(ms >= 280 && ms < 1500, '应约 300ms 返回，实际 ' + ms + 'ms');
+});
+t('runAsync 脚本抛错仍返回 ok:false', async () => {
+  const f = '/tmp/_sim_ta.js';
+  fs.writeFileSync(f, 'throw new Error("boom");');
+  const r = await createRuntime({ response: { body: '' } }).runAsync(f);
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.error.includes('boom'));
 });
 
 /* ---------- 8. splitTopLevel 边界 ---------- */
@@ -547,5 +589,12 @@ tExec('reject_img 拦图片 / reject_dict 拦 API 不应误报', () => {
   assert.ok(!out.includes('不匹配') && !out.includes('疑似'), '正确类型不应误报: ' + out.slice(0,120));
 });
 
-console.log(`\n结果: ${pass} 通过, ${fail} 失败${skipped ? ' · ' + skipped + ' 跳过(iSH嵌套不可用)' : ''}`);
-if (fail) { console.log('\n失败项:'); failures.forEach(f => console.log('  ✗ ' + f)); process.exit(1); }
+// v1.7.9：顺序执行收集到的 async 用例，再汇总
+(async () => {
+  for (const { name, fn } of asyncCases) {
+    try { await fn(); pass++; }
+    catch (e) { fail++; failures.push(`${name}\n    ${e.message.split('\n')[0]}`); }
+  }
+  console.log(`\n结果: ${pass} 通过, ${fail} 失败${skipped ? ' · ' + skipped + ' 跳过(iSH嵌套不可用)' : ''}`);
+  if (fail) { console.log('\n失败项:'); failures.forEach(f => console.log('  ✗ ' + f)); process.exit(1); }
+})();

@@ -3,6 +3,116 @@
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ---
+## [1.7.9] - 2026-10-28
+
+### ★ `runAsync()` — 模拟器终于能测异步脚本
+
+**这是本项目最大的能力缺口，也是本轮 PinDuoDuo 排查的主要成本来源。**
+
+#### 问题
+
+`run()` 是同步的：
+
+```js
+run(scriptPath) {
+  vm.runInContext(wrapped, ctx, {...});
+  return { ok: true, logs, done, doneCalled };   // ← 立即返回
+}
+```
+
+而 `$done` 绝大多数由 `$httpClient` 回调触发，永远比 `return` 晚。结果：
+
+```
+$ node cli.js run plugin.lpx ... --mock /tmp/m.json
+  [httpClient] POST ... (mocked)
+  ✗ 执行异常: $done 未被调用（Loon 将等待超时）
+```
+
+`--mock` 已经命中、`--allow-net` 也正常，**却始终拿不到结果**。
+于是验证只能靠手写 harness —— 本轮在 `/tmp` 建了 30+ 个脚本（`bt.js` / `cp.js` /
+`rw.js` / `cache2.js` / `dbg_bh.js`…），每个都要 `new Function(...)` + `setTimeout` 断言。
+
+更麻烦的是：这个限制被测试**锁死**了。
+
+```js
+// selftest.js 旧断言
+t('异步 $done（setTimeout）', () => {
+  const r = createRuntime({...}).run(f);
+  assert.strictEqual(r.doneCalled, false);   // 「模拟器不等待异步」
+});
+```
+
+#### 改动
+
+**`runtime.js`**
+
+| 项 | 说明 |
+|---|---|
+| 新增 `runAsync(scriptPath)` | 同步执行后，若 `$done` 未调用且脚本用过 `$httpClient` 或 `setTimeout`，则等待 |
+| `httpCalls` / `timerCalls` 计数 | 决定「值不值得等」 |
+| `donePromise` | `$done` 时 resolve，供 `Promise.race` 使用 |
+| 等待上限 | mock 模式 3s；`--allow-net` 模式 20s；`--async-timeout` 可覆盖 |
+
+```js
+async runAsync(scriptPath) {
+  vm.runInContext(wrapped, ctx, {...});
+  if (!doneCalled && (httpCalls > 0 || timerCalls > 0)) {
+    const ms = o.asyncTimeout || (allowNet ? 20000 : 3000);
+    await Promise.race([donePromise, new Promise(r => setTimeout(r, ms))]);
+  }
+  return { ok: true, logs, done, doneCalled };
+}
+```
+
+**关键设计：按需等待。** 纯同步脚本（绝大多数去广告脚本）`httpCalls === 0`，
+直接返回，零开销 —— 不会拖慢 38 个插件的全量 CI。
+
+**`cli.js`**
+
+| 命令 | 改动 |
+|---|---|
+| `run` / `trace` | `cmdRun()` → async，`rt.run` → `await rt.runAsync` |
+| `har` | `cmdHar()` → async，同上 |
+| `trigger` | **重写**：旧实现用 `setInterval` 轮询 `res.doneCalled`，但 `res` 是 `run()` 返回时的**值拷贝**，永远不会更新 → 必然空转到 30s 超时且拿不到结果。改为 `await runAsync` 顺序执行 |
+| 分发器 | 包进 `(async () => { ... })()`，统一 `await`，异常统一捕获 |
+
+**`selftest.js`**
+
+- `t()` 识别 `AsyncFunction`，收集到 `asyncCases`，同步用例跑完后顺序 `await`
+- 旧断言改为 `doneCalled === true` + `done.body === 'later'`
+- 新增 4 个用例（见下）
+
+#### 新增用例
+
+| 用例 | 断言 |
+|---|---|
+| 异步 `$done`（setTimeout） | `doneCalled=true`，`body='later'` |
+| `runAsync` 纯同步脚本零等待 | 耗时 < 200ms |
+| `runAsync` 等 httpClient 回调 | `body='got:OK'` |
+| `runAsync` 无回调按 asyncTimeout 返回 | ≈300ms 返回，`doneCalled=false` |
+| `runAsync` 脚本抛错 | `ok=false`，`error` 含 `boom` |
+
+#### 实测：本轮 7 个脚本全部一条命令验证
+
+```bash
+node cli.js run plugin.lpx --url <URL> --response-file <body>   --arg cps_label=true --arg cps_token=<tok> --mock /tmp/m.json
+```
+
+| 脚本 | 结果 |
+|---|---|
+| 首页 `cells/hub` | ✓ 已修改 |
+| 百补精选 `hermes/goods_list` | ✓ 已修改 |
+| 消费券滚动 `special-sale-coupon` | ✓ 已修改 |
+| 消费券专区 `cma/goods_list` | ✓ 已修改 |
+| `bybt/goods_fresh` 重刷 | ✓ 已修改 |
+| 月卡精选 `naga/selected/goods` | ✓ 已修改 |
+| 消费券首屏 `tandy_vase.html` | ✓ 已修改 |
+
+**结果与此前手写 harness 完全一致，但不再需要写任何 harness。**
+
+自测 86 → **90 通过**（4 个新用例），38 插件 check / parity 全绿。
+
+---
 ## [1.7.8] - 2026-10-28
 
 ### `--allow-net` 不带值时显式报错，不再静默降级

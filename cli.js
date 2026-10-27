@@ -549,49 +549,41 @@ function loadMocks() {
 }
 
 // ---------- trigger ----------
-function cmdTrigger() {
+async function cmdTrigger() {
   const kind = arg('_', 'cron'); // cron | network-changed | generic
   const rules = (lpx.scriptRules || []).filter(r => String(r.trigger || '').split(' ')[0] === kind);
   if (!rules.length) { console.log(`无 ${kind} 触发的脚本规则`); process.exit(3); }
   console.log(`找到 ${rules.length} 条 ${kind} 规则:`);
   let code = 0;
-  let idx = -1;
-  const start = Date.now();
-  const nextRule = () => { idx++; if (idx < rules.length) runRule(rules[idx], idx); };
-  function runRule(r, idx) {
+
+  // v1.7.9：改用 runAsync 顺序执行。
+  // 旧实现用 setInterval 轮询 res.doneCalled —— 但 res 是 run() 返回时的【快照】，
+  // done/doneCalled 是值拷贝，永远不会更新，导致异步脚本必然空转到 timeout(30s)
+  // 才打印「✓ 执行完成」，且拿不到 $done 结果。
+  for (let i = 0; i < rules.length; i++) {
+    const r = rules[i];
     const sim = resolveSimPath(r.script || r.scriptPath);
     console.log(`\n▸ ${r.cronExpr || kind} → ${path.basename(sim)}`);
-    if (!fs.existsSync(sim)) { console.log('  ❌ 本地找不到脚本'); code = 4; return nextRule(); }
+    if (!fs.existsSync(sim)) { console.log('  ❌ 本地找不到脚本'); code = 4; continue; }
     const rt = createRuntime({
       request: { url: '' }, argument: buildArgument(r),
       scriptName: path.basename(sim), debug: flag('verbose'),
       httpMocks: loadMocks(),
-          allowNet: loadAllowNet(), storeFile: arg('persist') || null,
+      allowNet: loadAllowNet(), storeFile: arg('persist') || null,
       timeout: Number(r.options?.timeout || arg('timeout', 20000)),
     });
-    const res = rt.run(sim);
-    const printResult = () => {
-      (res.logs || []).forEach(l => console.log('  | ' + l));
-      if (!res.ok) { console.log('  ❌ ' + res.error); code = 4; }
-      else if (res.doneCalled && res.done && Object.keys(res.done).length) console.log('  $done → ' + JSON.stringify(res.done).slice(0, 200));
-      else console.log('  ✓ 执行完成');
-    };
-    if (res.ok && !res.doneCalled) {
-      // 异步脚本: 等待最多 timeout (官方语义: $done 前不释放)
-      const wait = setInterval(() => {
-        if (res.doneCalled || Date.now() - start > Number(r.options?.timeout || 30) * 1000) {
-          clearInterval(wait); printResult();
-          if (idx === rules.length - 1) process.exit(code); else nextRule();
-        }
-      }, 100);
-    } else { printResult(); if (idx === rules.length - 1) process.exit(code); else nextRule(); }
-    return;
+    const res = await rt.runAsync(sim);
+    (res.logs || []).forEach(l => console.log('  | ' + l));
+    if (!res.ok) { console.log('  ❌ ' + res.error); code = 4; }
+    else if (!res.doneCalled) { console.log('  ❌ $done 未被调用'); code = 4; }
+    else if (res.done && Object.keys(res.done).length) console.log('  $done → ' + JSON.stringify(res.done).slice(0, 200));
+    else console.log('  ✓ 执行完成');
   }
-  nextRule(); // 启动 (异步脚本驱动; 完成时 process.exit)
+  process.exit(code);
 }
 
 // ---------- run ----------
-function cmdRun() {
+async function cmdRun() {
   const url = arg('url');
   if (!url) { console.error('需要 --url'); process.exit(1); }
   const phase = arg('phase', 'response');
@@ -653,7 +645,7 @@ function cmdRun() {
           storeFile: arg('persist') || null,
           timeout: Number(arg('timeout', 20000)),
         });
-        runs[f] = rt.run(sim);
+        runs[f] = await rt.runAsync(sim);
       }
       const res = runs[forms[0]];
       logs = res.logs || [];
@@ -731,7 +723,7 @@ function resolveSimPath(scriptPath) {
 }
 
 // ---------- har ----------
-function cmdHar() {
+async function cmdHar() {
   let reportLines = flag('report') ? [] : null;
   const reportPath = arg('report');
   const harPath = process.argv[4];
@@ -757,7 +749,7 @@ function cmdHar() {
     let before = e.response.content.text || '';
     try { if (e.response.content.encoding === 'base64') before = Buffer.from(before, 'base64').toString('utf8'); } catch {}
     const rt = createRuntime({ request: { url }, response: { status: e.response.status, body: before }, argument: m.argument, scriptName: 'sim' });
-    const res = rt.run(sim);
+    const res = await rt.runAsync(sim);
     const out = res.done && res.done.body ? (typeof res.done.body === 'string' ? res.done.body : JSON.stringify(res.done.body)) : null;
     const isChanged = out && out !== before;
     if (isChanged) changed++;
@@ -828,11 +820,14 @@ function fullDiff(before, after) {
 }
 function shortVal(v) { v = String(v); return v.length > 60 ? v.slice(0, 57) + '…' : v; }
 
-if (cmd === 'check') { const e = cmdCheck(); process.exit(e ? 2 : 0); }
-else if (cmd === 'trigger') cmdTrigger();
-else if (cmd === 'run' || cmd === 'trace') cmdRun();
-else if (cmd === 'har') cmdHar();
-else if (cmd === 'rules') cmdRules();
-else if (cmd === 'convert') { require('./convert'); }
-else if (cmd === 'init') { require('./init'); }
-else { console.error('未知命令: ' + cmd); process.exit(1); }
+// v1.7.9：run/trigger/har 已改 async（runAsync 要等 $done），统一在 IIFE 里 await
+(async () => {
+  if (cmd === 'check') { const e = cmdCheck(); process.exit(e ? 2 : 0); }
+  else if (cmd === 'trigger') await cmdTrigger();
+  else if (cmd === 'run' || cmd === 'trace') await cmdRun();
+  else if (cmd === 'har') await cmdHar();
+  else if (cmd === 'rules') cmdRules();
+  else if (cmd === 'convert') { require('./convert'); }
+  else if (cmd === 'init') { require('./init'); }
+  else { console.error('未知命令: ' + cmd); process.exit(1); }
+})().catch(e => { console.error('❌ ' + (e && e.stack || e)); process.exit(4); });
