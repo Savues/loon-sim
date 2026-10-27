@@ -46,9 +46,22 @@ node cli.js init my-plugin [dir]
 node cli.js har <plugin.lpx> <capture.har> --report out.md
 
 # 11. httpClient 白名单真连（严格 TLS；mock 优先 > 白名单 > simulated）
+#     ⚠️ --allow-net 必须带域名列表；不带值会直接报错退出（1.7.8）
 node cli.js run <plugin.lpx> --url "..." --allow-net api.example.com --mock mock.json
 
-# 12. 内核自测（65 项）
+# 11a. 异步脚本（脚本里用 $httpClient / setTimeout 触发 $done）
+#      run / har / trigger 都会自动等待 $done，无需额外参数（1.7.9）
+node cli.js run <plugin.lpx> --url "..." --mock mock.json --out out.json
+#      --async-timeout 覆盖等待上限（默认 mock 3s / allow-net 20s）
+
+# 11b. mock 按调用次数依次返回（测首次加载 vs 刷新 / 分页 / 缓存命中）
+#      { "api.example.com": [ {"status":200,"body":"A"},
+#                             {"status":200,"body":"B"} ] }   ← 用尽后固定最后一条
+
+# 11c. --out <file> 保存 $done.body 原值，便于 diff / 沉淀 fixture
+node cli.js run <plugin.lpx> --url "..." --mock m.json --out /tmp/out.json
+
+# 12. 内核自测（90 项，含 5 项异步用例）
 node selftest.js
 
 # 13. 全套 CI（自测 → 历史回溯 → 全量插件 check → parity）
