@@ -75,6 +75,7 @@ function createRuntime(o = {}) {
 
   // httpClient mock: { 'url子串或正则': {status, headers, body} } 命中即返回
   const httpMocks = o.httpMocks || null;
+  mockCursors.clear();   // 每次 createRuntime 从第一条开始（har 循环里每条请求独立回放）
   const allowNet = o.allowNet || null;   // 域名白名单数组, 如 ['api.github.com']
 
   const sandbox = {
@@ -169,9 +170,9 @@ function createRuntime(o = {}) {
         const wrapped = '(function () {\n' + code + '\n})();';
         vm.runInContext(wrapped, ctx, { filename: scriptPath, timeout: o.timeout || 20000 });
       } catch (e) {
-        return { ok: false, error: e.message, logs, done, doneCalled };
+        return { ok: false, error: e.message, logs, done, doneCalled, stats: { httpCalls, timerCalls } };
       }
-      return { ok: true, logs, done, doneCalled };
+      return { ok: true, logs, done, doneCalled, stats: { httpCalls, timerCalls } };
     },
 
     // v1.7.9：异步版本。$done 常由 $httpClient 回调触发，run() 同步返回时
@@ -202,8 +203,10 @@ function createRuntime(o = {}) {
         if (timer) clearTimeout(timer);
       }
 
-      if (thrown) return { ok: false, error: thrown.message, logs, done, doneCalled };
-      return { ok: true, logs, done, doneCalled };
+      // v1.7.10：把调用计数回传给 CLI，供诊断区分「外部依赖未满足」与「逻辑未命中」
+      const stats = { httpCalls, timerCalls };
+      if (thrown) return { ok: false, error: thrown.message, logs, done, doneCalled, stats };
+      return { ok: true, logs, done, doneCalled, stats };
     },
   };
 }
@@ -285,10 +288,20 @@ function httpReq(method, args, cb, logs, mocks, allowNet) {
   if (typeof cb === 'function') setImmediate(() => cb(null, resp, resp.body));
 }
 
+// v1.7.10：mock 支持数组 → 按调用次数依次返回，用尽后固定返回最后一条。
+// 用于测「首次加载 vs 刷新」「分页」「缓存命中 vs 未命中」这类同一 URL 多次不同响应的场景
+// （此前只能手写两套 store 模拟）。
+const mockCursors = new Map();
 function matchMock(url, mocks) {
   for (const k of Object.keys(mocks)) {
-    if (k.startsWith('/') && k.endsWith('/') && new RegExp(k.slice(1, -1)).test(url)) return mocks[k];
-    if (url.includes(k)) return mocks[k];
+    const hit = (k.startsWith('/') && k.endsWith('/') && new RegExp(k.slice(1, -1)).test(url))
+             || url.includes(k);
+    if (!hit) continue;
+    const v = mocks[k];
+    if (!Array.isArray(v)) return v;
+    const n = mockCursors.get(k) || 0;
+    mockCursors.set(k, n + 1);
+    return v[Math.min(n, v.length - 1)];
   }
   return null;
 }

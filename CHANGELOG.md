@@ -3,6 +3,85 @@
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ---
+## [1.7.10] - 2026-10-28
+
+### 诊断分态 + `--out` + mock 序列 + 若干收尾
+
+#### ① 诊断把「未修改」拆成三种成因
+
+**旧文案**（一刀切）：
+
+```
+! 规则已命中，但脚本【未修改任何内容】—— 若预期应修改，
+  检查脚本逻辑（例如清洗函数是否真的被调用；函数定义了但没调用是常见原因）
+```
+
+本轮 PinDuoDuo 排查时，实际原因反复是「`cps_token` 为空」和「没给 mock」，
+文案却一直把人往「函数没被调用」上带。
+
+**新逻辑**（`report.js` + `cli.js` 传 `diag` 上下文，`runtime.js` 回传 `stats`）：
+
+| 优先级 | 判定 | 提示 |
+|---|---|---|
+| ① | 本规则依赖的参数为空 | `本规则依赖的参数为空：cps_token —— 用 --arg 补上` |
+| ② | `httpCalls > 0` 且无 mock / allow-net | `发起了 N 次请求但请求全部落空 → 补 --mock 或 --allow-net` |
+| ③ | `httpCalls > 0` 且依赖齐全 | `请求发了且未改动 —— 检查接口返回值是否命中分支（--verbose）` |
+| ④ | `httpCalls === 0` | 才提示「检查清洗函数是否被调用」 |
+
+`emptyArgs` **只取当前生效规则的 `argument` 键**（早期版本把所有规则的空参数都算进来，
+误报 `Bot_custom` 这种无关参数）。
+
+#### ② `--out <file>` 保存输出
+
+```bash
+node cli.js run plugin.lpx --url ... --mock m.json --out /tmp/out.json
+→ 已写入 /tmp/out.json（46280B）
+```
+
+便于 diff、沉淀 fixture。注意取的是 `$done.body` 原值，不是诊断里的 200 字符预览。
+
+#### ③ mock 支持数组 → 按调用次数依次返回
+
+```json
+{ "api.example.com": [ {"status":200,"body":"A"},
+                       {"status":200,"body":"B"} ] }
+```
+
+用尽后固定返回最后一条。用于测「首次加载 vs 刷新」「分页」「缓存命中 vs 未命中」——
+此前只能手写两套 store 模拟。
+
+`mockCursors` 在每次 `createRuntime()` 时清空，保证 har 循环里每条请求独立回放、可重复运行。
+
+#### ④ `--async-timeout <ms>`
+
+覆盖 `runAsync` 的等待上限（默认 mock 3s / `--allow-net` 20s）。
+已接入 `run` / `trigger` / `har` 三处 `createRuntime`。
+
+#### ⑤ 数组形态诊断支持异步脚本
+
+旧 `norm()` 只比 `$done.body`，异步脚本两边都为空 → 恒等 → 漏报
+（v2.03「`feed_ad` 丢失」正是这类）。改为 `body|doneCalled|logs长度` 三维比较。
+
+实测（脚本完全不处理数组形态）：
+
+```
+! ★ 脚本对 $argument 的【对象/数组】两种形态处理结果不同
+!   对象形态 → {"got":true}|done=1|logs=66
+!   数组形态 → {"got":false}|done=1|logs=66
+```
+
+#### ⑥ `#!openUrl` 加入已知字段白名单
+
+之前每次 `check` 都打印 `⚠️ 未知 #! 字段: #!openUrl`，但它不计入 `warns`，纯噪音。
+比对时对字段名做 `toLowerCase()`，兼容 `#!openUrl` / `#!openurl`。
+
+#### 验证
+
+- selftest **90 通过 0 失败**
+- 38 插件 check / parity 全绿
+- PinDuoDuo 7 个异步脚本全部一条命令验证通过
+
+---
 ## [1.7.9] - 2026-10-28
 
 ### ★ `runAsync()` — 模拟器终于能测异步脚本

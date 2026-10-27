@@ -7,7 +7,7 @@ const c = (code, s) => (useColor ? code + s + C.x : s);
 const tag = (sym, text, color) => `${c(color, sym)} ${text}`;
 
 // ---- 单个 URL 的完整决策视图 ----
-function renderTrace({ url, phase, status, argValues, rewrite, script, mitm, done, logs, bodyBefore, bodyAfter, ruleHit, argFormMismatch }) {
+function renderTrace({ url, phase, status, argValues, rewrite, script, mitm, done, logs, bodyBefore, bodyAfter, ruleHit, argFormMismatch, diag }) {
   const L = [];
   L.push('');
   L.push(c(C.B, '━'.repeat(72)));
@@ -107,8 +107,23 @@ function renderTrace({ url, phase, status, argValues, rewrite, script, mitm, don
     hints.push(`  对象形态 → ${argFormMismatch.object}`);
     hints.push(`  数组形态 → ${argFormMismatch.array}`);
   }
+  // v1.7.10：把「未修改」拆成三种成因，避免一句话把所有情况都指向「逻辑没跑」
   if (done && done.unchanged && script && script.effective) {
-    hints.push('规则已命中，但脚本【未修改任何内容】—— 若预期应修改，检查脚本逻辑（例如清洗函数是否真的被调用；函数定义了但没调用是常见原因）');
+    const d = diag || {};
+    if (d.emptyArgs && d.emptyArgs.length) {
+      // ① 依赖参数为空 —— 脚本最常见的「未配置就跳过」保护，优先级最高
+      hints.push(`本规则依赖的参数为空：${d.emptyArgs.join(', ')} —— 多数脚本缺关键参数时会直接 return（原样放行）。`);
+      hints.push('  用 --arg <key>=<value> 补上。');
+    } else if (d.httpCalls > 0 && !d.hasMock && !d.hasAllowNet) {
+      // ② 外部依赖未满足 —— 本轮 PinDuoDuo 排查最常见的情况
+      hints.push(`脚本发起了 ${d.httpCalls} 次 $httpClient 请求，但既没有 --mock 也没有 --allow-net → 请求全部落空，脚本走失败分支原样返回。`);
+      hints.push('  补一个 --mock <file.json>（键为 URL 子串），或 --allow-net <域名> 走真实网络。');
+    } else if (d.httpCalls > 0) {
+      // ③ 请求发了、参数齐了，仍未修改 → 才该怀疑逻辑
+      hints.push(`脚本发起了 ${d.httpCalls} 次 $httpClient 请求且未改动响应 —— 检查接口返回值是否命中预期分支（--verbose 可看完整日志）。`);
+    } else {
+      hints.push('规则已命中，但脚本【未修改任何内容】—— 脚本没有发起任何网络请求，检查清洗函数是否真的被调用（函数定义了但没调用是常见原因）。');
+    }
   }
   if (hints.length) {
     L.push(c(C.B, '▸ 诊断'));

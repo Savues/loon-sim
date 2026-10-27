@@ -47,8 +47,10 @@ function cmdCheck() {
   if (!p.header.version && !p.header.date) { console.log('⚠️  缺少 #!version / #!date'); warns++; }
   if (p.header.version && !p.header.date) console.log('ℹ️  使用了 #!version（官方字段表只有 #!date，可能不显示）');
 
-  const knownHeader = new Set(['name', 'desc', 'author', 'homepage', 'icon', 'system', 'system_version', 'loon_version', 'date', 'tag', 'type', 'version']);
-  for (const k of Object.keys(p.header)) if (!knownHeader.has(k)) console.log(`⚠️  未知 #! 字段: #!${k}`);
+  // v1.7.10：补 openUrl —— Loon 官方支持 #!openUrl（安装后点插件跳到 App Store），
+  // 之前被当成未知字段报噪音，而它并不计入 warns，纯干扰。
+  const knownHeader = new Set(['name', 'desc', 'author', 'homepage', 'icon', 'system', 'system_version', 'loon_version', 'date', 'tag', 'type', 'version', 'openurl']);
+  for (const k of Object.keys(p.header)) if (!knownHeader.has(k.toLowerCase())) console.log(`⚠️  未知 #! 字段: #!${k}`);
 
   // 1b) [Argument] 定义合法性 (A1~A6)
   for (const w of (p.argWarnings || [])) { console.log(`⚠️ ${w.msg}`); warns++; }
@@ -571,6 +573,7 @@ async function cmdTrigger() {
       httpMocks: loadMocks(),
       allowNet: loadAllowNet(), storeFile: arg('persist') || null,
       timeout: Number(r.options?.timeout || arg('timeout', 20000)),
+      asyncTimeout: arg('async-timeout') ? Number(arg('async-timeout')) : undefined,
     });
     const res = await rt.runAsync(sim);
     (res.logs || []).forEach(l => console.log('  | ' + l));
@@ -622,7 +625,7 @@ async function cmdRun() {
 
   const hr = matchRule(lpx, url);
 
-  let done = null, logs = [], argFormMismatch = null;
+  let done = null, logs = [], argFormMismatch = null, runStats = null, runBody = null;   // v1.7.10: runStats 供诊断 / runBody 供 --out
   const eff = scriptRes.effective;
   if (eff) {
     const sim = resolveSimPath(eff.script);
@@ -644,16 +647,26 @@ async function cmdRun() {
           allowNet: loadAllowNet(),
           storeFile: arg('persist') || null,
           timeout: Number(arg('timeout', 20000)),
+          asyncTimeout: arg('async-timeout') ? Number(arg('async-timeout')) : undefined,
         });
         runs[f] = await rt.runAsync(sim);
       }
       const res = runs[forms[0]];
+      runStats = res.stats || null;
+      runBody = (res.done && res.done.body != null)
+        ? (typeof res.done.body === 'string' ? res.done.body : JSON.stringify(res.done.body))
+        : null;
       logs = res.logs || [];
       // 两形态结果不一致 → 脚本不兼容
       if (forms.length === 2) {
-        const norm = (r) => (r.ok && r.doneCalled && r.done && r.done.body)
-          ? (typeof r.done.body === 'string' ? r.done.body : JSON.stringify(r.done.body))
-          : (r.ok ? '' : 'ERR:' + r.error);
+        // v1.7.10：异步脚本两边 body 都可能为空，只比 body 会恒等漏报。
+        // 比较维度加上 doneCalled 与 logs（脚本分支差异会体现在日志里）。
+        const norm = (r) => {
+          const b = (r.ok && r.doneCalled && r.done && r.done.body)
+            ? (typeof r.done.body === 'string' ? r.done.body : JSON.stringify(r.done.body))
+            : (r.ok ? '' : 'ERR:' + r.error);
+          return b + '|done=' + (r.doneCalled ? 1 : 0) + '|logs=' + ((r.logs || []).join('\n').length);
+        };
         const a = norm(runs.object), b = norm(runs.array);
         if (a !== b) {
           argFormMismatch = {
@@ -687,8 +700,29 @@ async function cmdRun() {
     }
   }
 
+  // v1.7.10：--out <file> 保存 $done.body，便于 diff / 沉淀 fixture
+  const outFile = arg('out');
+  if (outFile) {
+    const full = runBody || '';
+    try { fs.writeFileSync(outFile, full); console.log(`→ 已写入 ${outFile}（${full.length}B）`); }
+    catch (e) { console.error(`❌ 写 ${outFile} 失败: ${e.message}`); }
+  }
+
   const out = renderTrace({
     url, phase, status, argValues, rewrite, script: scriptRes, mitm, done, logs, ruleHit: hr,
+    // v1.7.10：诊断上下文 —— 用于区分「外部依赖未满足」与「脚本逻辑未命中」
+    diag: {
+      httpCalls: (runStats && runStats.httpCalls) || 0,
+      timerCalls: (runStats && runStats.timerCalls) || 0,
+      hasMock: !!loadMocks(),
+      hasAllowNet: !!loadAllowNet(),
+      // 只看【当前生效规则】用到的参数，不要把别的规则的空参数也算进来
+      emptyArgs: (() => {
+        const eff = scriptRes && scriptRes.effective;
+        const keys = Object.keys((eff && eff.argument) || {});
+        return keys.filter(k => argValues[k] === '' || argValues[k] === null || argValues[k] === undefined);
+      })(),
+    },
     bodyBefore: body ? body.length : null,
     bodyAfter: (done && done.fields && done.fields['长度']) ? Number(String(done.fields['长度'].to).replace('B', '')) : null,
     argFormMismatch,
@@ -748,7 +782,9 @@ async function cmdHar() {
     const sim = resolveSimPath(m.scriptRule.scriptPath);
     let before = e.response.content.text || '';
     try { if (e.response.content.encoding === 'base64') before = Buffer.from(before, 'base64').toString('utf8'); } catch {}
-    const rt = createRuntime({ request: { url }, response: { status: e.response.status, body: before }, argument: m.argument, scriptName: 'sim' });
+    const rt = createRuntime({ request: { url }, response: { status: e.response.status, body: before }, argument: m.argument, scriptName: 'sim',
+      httpMocks: loadMocks(), allowNet: loadAllowNet(),
+      asyncTimeout: arg('async-timeout') ? Number(arg('async-timeout')) : undefined });
     const res = await rt.runAsync(sim);
     const out = res.done && res.done.body ? (typeof res.done.body === 'string' ? res.done.body : JSON.stringify(res.done.body)) : null;
     const isChanged = out && out !== before;
