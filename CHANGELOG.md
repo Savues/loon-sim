@@ -3,6 +3,59 @@
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ---
+## [1.7.11] - 2026-10-28
+
+### `splitActionPipe` 支持引号内的 `|`
+
+**事故背景**（PinDuoDuo v2.40 排查，2026-10-28）
+
+尝试用 `[Rewrite]` + `response-body-json-jq` 替代 `[Script]` 处理首页 hub：
+
+```
+^https://api.pinduoduo.com/api/alexa/homepage/hub\? response-body-json-jq '.result |= (del(.a) | del(.b))'
+```
+
+模拟器报了一堆：
+
+```
+✗ action response.json.jq(".result — 无法解析 Action
+✗ action = (del(.search_bar_hot_query) — 无法解析 Action
+✗ action del — 未知 Action: del
+✗ action (if .bottom_tabs then ... — 无法解析 Action
+```
+
+**根因**：`execRewrite` 用朴素的 `actionPipe.split('|')` 切分 action 管道，
+把 jq 表达式里的 `|`（管道运算符）也当成 action 分隔符，一条规则被切成 8 段。
+
+这不仅是模拟器的 bug —— **jq 表达式含管道是常态**，此前的 `order_list_v4` 规则
+（`.orders |= map(.order_buttons |= map(del(.order_growth_tip)))`）恰好没有顶层管道，
+所以一直没暴露。
+
+#### 改动
+
+新增 `splitActionPipe(str)`，逐字符扫描：
+
+| 状态 | 行为 |
+|---|---|
+| 在 `"` / `'` / `` ` `` 内 | 忽略 `|`，遇未转义的闭合引号才退出 |
+| 在 `(` / `[` 内（depth > 0） | 忽略 `|` |
+| depth === 0 且不在引号内 | 遇到 `|` 才切分 |
+
+#### 验证
+
+```bash
+# 修复前：切成 8 段，全部「无法解析 Action」
+# 修复后：单条 action，jq 正常执行
+node cli.js run plugin.lpx --url "https://api.pinduoduo.com/api/alexa/homepage/hub?x=1" \
+  --response-file hub.json
+#   ✓ action response.json.jq
+#   输出 bottom_tabs: 首页/聊天/个人中心
+```
+
+同时把 `package.json` 版本号从 1.7.7 补到 1.7.11（此前漏更）。
+
+---
+
 ## [1.7.10] - 2026-10-28
 
 ### 诊断分态 + `--out` + mock 序列 + 若干收尾
