@@ -7,6 +7,25 @@
  * Action 管道: a | b 从左到右, 单个失败跳过继续 (官方语义)
  */
 
+
+/** 按 | 分割 action 管道，跳过 "..." / '...' / `...` / /re/ 内部的竖线 */
+function splitActionPipe(str) {
+  const out = [];
+  let cur = '', depth = 0, q = null, re = false;
+  for (let i = 0; i < str.length; i++) {
+    const ch = str[i];
+    if (q) { cur += ch; if (ch === q && str[i - 1] !== '\\') q = null; continue; }
+    if (ch === '"' || ch === "'" || ch === '`') { q = ch; cur += ch; continue; }
+    if (ch === '(' || ch === '[') { depth++; cur += ch; continue; }
+    if (ch === ')' || ch === ']') { depth--; cur += ch; continue; }
+    // 正则字面量只在参数位置出现（如 test(/re/)），引号外且 depth>0 时保守处理
+    if (ch === '|' && depth === 0) { out.push(cur.trim()); cur = ''; continue; }
+    cur += ch;
+  }
+  if (cur.trim()) out.push(cur.trim());
+  return out.filter(Boolean);
+}
+
 /** 解析 action 串: name(arg1, arg2, ...) — 参数支持 "str" / `raw` / /re/flags / number / bool / null */
 function parseAction(actionStr) {
   const m = /^([\w.]+)\s*\((.*)\)\s*$/.exec(actionStr.trim());
@@ -88,7 +107,10 @@ const MOCK_CT = {
  * @returns {object} {state, terminated, actions: [{name, ok, error}]}
  */
 function execRewrite(state, actionPipe, vars) {
-  const parts = actionPipe.split('|').map(x => x.trim()).filter(Boolean);
+  // v1.7.11：按 | 分割 action 时必须【跳过引号内的 |】。
+  // json-jq 的表达式常含管道（del(.a) | del(.b)、.x |= map(select(.y | test("z")))），
+  // 朴素 split('|') 会把一个 jq 表达式切成多段，误报「未知 Action」。
+  const parts = splitActionPipe(actionPipe);
   const log = [];
   let terminated = false;
   for (const part of parts) {
