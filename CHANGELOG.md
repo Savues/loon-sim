@@ -3,6 +3,57 @@
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ---
+## [1.7.12] - 2026-10-28
+
+### `body.replace` 支持正则字面量 + `parseAction` 转义修复
+
+**事故背景**（PinDuoDuo v2.41，改 JS bundle 跳过滑动计时）
+
+规则：
+
+```
+response-body-replace-regex m\.current\x7c\x7cd\( d(
+```
+
+模拟器显示 `✓ action response.body.replace`，但 **body 一字未改**。
+
+#### ① `body.replace` 把正则当字面字符串
+
+```js
+// 旧：a[0] 是字符串 "/m\.current||d\(/"，String.replace 按字面子串匹配 → 永不命中
+state.body = String(state.body).replace(a[0], String(a[1]));
+```
+
+converter 输出的是**正则字面量** `/pat/flags`，需要还原成 RegExp：
+
+```js
+state.body = String(state.body).replace(toRegExp(a[0]), String(a[1]));
+```
+
+#### ② `parseAction` 把 `\(` 当真实括号
+
+正则里的 `\(` 被计入 `depth`，导致后续逗号不再被识别为参数分隔符，
+整个参数串被当成一个 arg：
+
+```
+args: ["/m\.current\x7c\x7cd\(/, "d(""]   ← 错误
+args: ["/m\.current\x7c\x7cd\(/", ""d(""]  ← 修复后
+```
+
+修复：字符扫描时处理 `\` 转义（跳过一个字符），并把正则字面量的进入条件
+从「cur 以 `(,` 或空白结尾」改为「cur 全为空白或逗号」。
+
+#### 验证
+
+```bash
+# 输入 255812B → 输出 255801B（少 11 字节 = "m.current||"）
+# 已移除 m.current||d(  ✅
+# 已改为 setInterval((function(){d(  ✅
+# 括号平衡一致 ✅
+```
+
+---
+
 ## [1.7.11] - 2026-10-28
 
 ### `splitActionPipe` 支持引号内的 `|`

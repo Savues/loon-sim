@@ -22,6 +22,22 @@ function arg(name, def) {
 }
 function flag(name) { return process.argv.includes('--' + name); }
 
+// 解析重复出现的 --arg k=v（run / har 共用）
+function parseArgOverrides() {
+  const o = {};
+  for (let i = 0; i < process.argv.length; i++) {
+    if (process.argv[i] === '--arg') {
+      const kv = process.argv[i + 1] || '';
+      const [k, ...rest] = kv.split('=');
+      let v = rest.join('=');
+      if (v === 'true') v = true; else if (v === 'false') v = false;
+      else if (/^-?\d+$/.test(v)) v = Number(v);
+      o[k] = v;
+    }
+  }
+  return o;
+}
+
 const cmd = process.argv[2];
 const lpxPath = process.argv[3];
 if (!cmd || !lpxPath) {
@@ -594,17 +610,7 @@ async function cmdRun() {
   const rf = arg('response-file');
   let body = rf ? fs.readFileSync(rf, 'utf8') : null;
 
-  const argOverrides = {};
-  for (let i = 0; i < process.argv.length; i++) {
-    if (process.argv[i] === '--arg') {
-      const kv = process.argv[i + 1] || '';
-      const [k, ...rest] = kv.split('=');
-      let v = rest.join('=');
-      if (v === 'true') v = true; else if (v === 'false') v = false;
-      else if (/^-?\d+$/.test(v)) v = Number(v);
-      argOverrides[k] = v;
-    }
-  }
+  const argOverrides = parseArgOverrides();
   const argValues = {};
   for (const [k, d] of Object.entries(lpx.args)) argValues[k] = (k in argOverrides) ? argOverrides[k] : d.default;
 
@@ -766,6 +772,8 @@ async function cmdHar() {
   const limit = Number(arg('limit', 0));
   const only = arg('only');
   const showAll = flag('all');
+  const verbose = flag('verbose');
+  const argOverrides = parseArgOverrides();
   let n = 0, matched = 0, changed = 0, blocked = 0;
   const entries = har.log.entries;
   for (const e of entries) {
@@ -774,9 +782,21 @@ async function cmdHar() {
     if (limit && n >= limit) break;
     n++;
     const argValues = {};
-    for (const [k, d] of Object.entries(lpx.args)) argValues[k] = d.default;
-    const m = matchRequest(lpx, { url, phase: 'response', status: e.response.status, argValues, headers: {} });
-    if (m.blocked) blocked++;
+    for (const [k, d] of Object.entries(lpx.args)) argValues[k] = (k in argOverrides) ? argOverrides[k] : d.default;
+    // [Rule] 先判：域名级 REJECT 在 Loon 里先于 MITM/Script 生效
+    const ruleHit = matchRule(lpx, url);
+    if (ruleHit && String(ruleHit.policy || '').toUpperCase().includes('REJECT')) {
+      blocked++;
+      if (verbose) console.log(`  ⛔ [Rule] ${ruleHit.raw}  ${url.slice(0, 110)}`);
+      continue;
+    }
+    const m = matchRequest(lpx, { url, phase: 'response', status: e.response.status, argValues, argOverrides, headers: {} });
+    if (m.blocked) {
+      blocked++;
+      const note = m.notes.find(x => x.includes('终止类')) || 'Rewrite 终止';
+      if (verbose) console.log(`  ⛔ [Rewrite] ${note}  ${url.slice(0, 110)}`);
+      continue;
+    }
     if (!m.scriptRule) { if (showAll) console.log(`  —  ${url.slice(0, 100)}`); continue; }
     matched++;
     const sim = resolveSimPath(m.scriptRule.scriptPath);
@@ -815,6 +835,21 @@ function cmdRules() {
     const argValues = {};
     for (const [k, d] of Object.entries(lpx.args)) argValues[k] = d.default;
     const m = matchRequest(lpx, { url, phase: 'response', status: 200, argValues, headers: {} });
+    // --json: 机读输出（供插件语义回归测试断言；无 flag 时输出保持原样）
+    if (flag('json')) {
+      const rule = matchRule(lpx, url);
+      console.log(JSON.stringify({
+        url,
+        rule: rule ? rule.raw : null,
+        ruleBlocked: !!rule,
+        rewrite: m.notes.find(n => n.includes('Rewrite')) || null,
+        rewriteBlocked: !!m.blocked,
+        script: m.scriptRule ? m.scriptRule.raw : null,
+        argument: m.argument || null,
+        notes: m.notes
+      }, null, 2));
+      return;
+    }
     console.log(`URL: ${url}`);
     console.log(`  [Rule]    : ${matchRule(lpx, url)?.raw || '无'}`);
     console.log(`  [Rewrite] : ${m.notes.find(n => n.includes('Rewrite')) || '无'}`);

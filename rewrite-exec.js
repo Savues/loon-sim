@@ -26,6 +26,15 @@ function splitActionPipe(str) {
   return out.filter(Boolean);
 }
 
+/** 把 /pattern/flags 字符串还原成 RegExp；不是字面量形式则按普通字符串处理 */
+function toRegExp(v) {
+  if (v instanceof RegExp) return v;
+  const s = String(v);
+  const m = /^\/([\s\S]*)\/([gimsuy]*)$/.exec(s);
+  if (!m) return s;
+  try { return new RegExp(m[1], m[2]); } catch { return s; }
+}
+
 /** 解析 action 串: name(arg1, arg2, ...) — 参数支持 "str" / `raw` / /re/flags / number / bool / null */
 function parseAction(actionStr) {
   const m = /^([\w.]+)\s*\((.*)\)\s*$/.exec(actionStr.trim());
@@ -34,12 +43,34 @@ function parseAction(actionStr) {
   const rest = m[2];
   const args = [];
   let cur = '', depth = 0, q = null, re = false;
+
   for (let i = 0; i < rest.length; i++) {
     const ch = rest[i];
-    if (q) { cur += ch; if (ch === q) q = null; continue; }
+
+    // 引号内：原样收集，只认未转义的闭合引号
+    if (q) {
+      cur += ch;
+      if (ch === '\\' && i + 1 < rest.length) { cur += rest[++i]; continue; }
+      if (ch === q) q = null;
+      continue;
+    }
+
+    // v1.7.12：正则字面量 /.../flags
+    // 旧实现只在「cur 以 ( , 或空白结尾」时进入 re 模式，导致
+    // response.body.replace(/a\(b/, "c") 里的 \( 被当成真实括号 → depth 失衡
+    // → 逗号不再是分隔符 → 整个参数串被当成一个 arg。
+    if (re) {
+      cur += ch;
+      if (ch === '\\' && i + 1 < rest.length) { cur += rest[++i]; continue; }
+      if (ch === '/') re = false;
+      continue;
+    }
+
+    // 参数开头（或紧随逗号/空白）遇到 / → 视为正则字面量起点
+    if (ch === '/' && /^[\s,]*$/.test(cur)) { re = true; cur += ch; continue; }
+
     if (ch === '"' || ch === '`' || ch === "'") { q = ch; cur += ch; continue; }
-    if (ch === '/' && !re && depth === 0 && /[(,\s]$/.test(cur)) { re = true; cur += ch; continue; }
-    if (re) { cur += ch; if (ch === '/') re = false; continue; }
+    if (ch === '\\' && i + 1 < rest.length) { cur += ch + rest[++i]; continue; }
     if (ch === '(' || ch === '[') { depth++; cur += ch; continue; }
     if (ch === ')' || ch === ']') { depth--; cur += ch; continue; }
     if (ch === ',' && depth === 0) { args.push(cur.trim()); cur = ''; continue; }
@@ -48,6 +79,17 @@ function parseAction(actionStr) {
   if (cur.trim()) args.push(cur.trim());
   return { name, args };
 }
+
+function toRegExp(v) {
+  if (v instanceof RegExp) return v;
+  const s = String(v);
+  const m = /^\/([\s\S]*)\/([gimsuy]*)$/.exec(s);
+  if (!m) return s;
+  try { return new RegExp(m[1], m[2]); } catch { return s; }
+}
+
+/** 解析 action 串: name(arg1, arg2, ...) — 参数支持 "str" / `raw` / /re/flags / number / bool / null */
+
 
 /** 字面量求值: "str"(模板) / `raw` / /re/ / number / bool / null */
 function evalArg(raw, vars) {
@@ -162,7 +204,9 @@ function apply(state, name, a) {
     // --- body.replace ---
     if ((m = /^(request|response)\.body\.replace$/.exec(name))) {
       if (state.body == null) return 'body 为空';
-      state.body = String(state.body).replace(a[0], String(a[1])); return;
+      // v1.7.12：官方新语法传【正则字面量】/pat/flags，converter 输出也是这个形态。
+      // 之前直接当字符串做字面子串替换，正则永远匹配不到（action 显示 ✓ 但 body 一字未改）。
+      state.body = String(state.body).replace(toRegExp(a[0]), String(a[1])); return;
     }
     // --- json ---
     if ((m = /^(request|response)\.json\.(add|delete|replace|jq)$/.exec(name))) {
