@@ -754,6 +754,7 @@ function resolveSimPath(scriptPath) {
     path.join(dir, scriptPath),                   // 相对 lpx 的直接路径
     path.join(dir, 'src', name),                  // plugins/<Name>/src/x.js  ← 主用
     path.join(dir, name),                         // plugins/<Name>/x.js
+    path.join(dir, 'scripts', name),              // plugins/<Name>/scripts/x.js  ← 多脚本插件（Allinone 等）
     path.join(dir, 'upstream', name),
     path.join(dir, '..', '..', 'tools', 'loon-sim', 'vendor', name),
     global.__simVendor ? path.join(global.__simVendor, name) : null,

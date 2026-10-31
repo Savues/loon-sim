@@ -425,6 +425,19 @@ ci.sh                  → 全绿（③ 0错误 37 / ④ 一致 37）
 让下次踩坑前就能被拦住。
 
 ---
+## [1.7.7] - 2026-11-01
+
+### ★ resolveSimPath 补 `scripts/` 子目录查找（多脚本插件全部无法 run）
+
+- **缺陷**: `resolveSimPath` 只查 `<插件目录>/{src,x.js,upstream,vendor}`，**不查 `scripts/`**
+  → Bilibili-Allinone 这类"脚本放在 scripts/ 下"的插件，`cli.js run` 一律报
+  「本地找不到脚本文件」（vip.js / param-teenager.js 全部命中不了）
+- **影响**: 该插件的端到端 run 验证长期失效，只能靠 check + 直调脚本；直调绕过了规则入口，
+  正是 pitfalls #12 警告的反模式
+- **修复**: 候选路径增加 `path.join(dir, 'scripts', name)`
+- **验证**: `cli.js run` 对 param-teenager.js / vip.js 均正确解析并执行
+
+---
 ## [1.7.6] - 2026-10-26
 
 ### ★ selftest 修复 cwd 依赖 — 之前所有「环境抖动」假象的真因

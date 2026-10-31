@@ -1,6 +1,6 @@
 {
   "name": "loon-sim",
-  "version": "1.7.12",
+  "version": "1.7.7",
   "description": "Loon 插件本地模拟器 — 离线运行插件规则与脚本, 给出逐条决策反馈",
   "keywords": [
     "loon",
