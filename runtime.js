@@ -214,7 +214,11 @@ function createRuntime(o = {}) {
 function normalizeDone(v) {
   if (v === undefined || v === null) return {};
   if (typeof v !== 'object') return v;
-  if (Buffer.isBuffer(v) || v instanceof Uint8Array) return v;
+  // v1.7.14: 跨 realm 判断。脚本在 vm 沙箱里 new Uint8Array()，其构造器与宿主不同，
+  // `v instanceof Uint8Array` 恒为 false，会被误当成普通对象展开成 {"0":0,"1":0,...}。
+  if (Buffer.isBuffer(v)) return v;
+  if (typeof v.length === 'number' && typeof v.subarray === 'function' && typeof v !== 'string') return v;
+  if (Object.prototype.toString.call(v) === '[object Uint8Array]') return v;
   // 把 vm 跨 realm 的对象转成主 realm 的普通对象，便于比较与序列化
   const out = {};
   for (const k of Object.keys(v)) out[k] = v[k];

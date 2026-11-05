@@ -602,13 +602,32 @@ async function cmdTrigger() {
 }
 
 // ---------- run ----------
+// Uint8Array/Buffer → 二进制字符串（latin1），供长度统计与显示；普通字符串原样返回
+function bodyToText(b) {
+  if (b == null) return null;
+  if (typeof b === 'string') return b;
+  if (Buffer.isBuffer(b)) return b.toString('latin1');
+  if (typeof b.length === 'number' && typeof b.subarray === 'function') {
+    return Buffer.from(Array.prototype.slice.call(b)).toString('latin1');
+  }
+  return JSON.stringify(b);
+}
+
 async function cmdRun() {
   const url = arg('url');
   if (!url) { console.error('需要 --url'); process.exit(1); }
   const phase = arg('phase', 'response');
   const status = Number(arg('status', 200));
   const rf = arg('response-file');
-  let body = rf ? fs.readFileSync(rf, 'utf8') : null;
+  // v1.7.14: --response-file 可能是二进制（gRPC/protobuf）。原先一律按 utf8 读，
+  // 非法字节被替换成 U+FFFD，脚本拿到的 body 已损坏（binary-body-mode 场景全部失效）。
+  // 现在：能无损按 utf8 往返就用字符串（保持旧行为），否则传 Buffer。
+  let body = null;
+  if (rf) {
+    const rawBuf = fs.readFileSync(rf);
+    const asStr = rawBuf.toString('utf8');
+    body = Buffer.from(asStr, 'utf8').equals(rawBuf) ? asStr : rawBuf;
+  }
 
   const argOverrides = parseArgOverrides();
   const argValues = {};
@@ -659,9 +678,9 @@ async function cmdRun() {
       }
       const res = runs[forms[0]];
       runStats = res.stats || null;
-      runBody = (res.done && res.done.body != null)
-        ? (typeof res.done.body === 'string' ? res.done.body : JSON.stringify(res.done.body))
-        : null;
+      // v1.7.14: body 可能是 Uint8Array（binary-body-mode）。此前一律 JSON.stringify，
+      // 结果变成 {"0":0,"1":0,...}，长度与内容全错。改为按字节还原。
+      runBody = (res.done && res.done.body != null) ? bodyToText(res.done.body) : null;
       logs = res.logs || [];
       // 两形态结果不一致 → 脚本不兼容
       if (forms.length === 2) {
@@ -669,7 +688,7 @@ async function cmdRun() {
         // 比较维度加上 doneCalled 与 logs（脚本分支差异会体现在日志里）。
         const norm = (r) => {
           const b = (r.ok && r.doneCalled && r.done && r.done.body)
-            ? (typeof r.done.body === 'string' ? r.done.body : JSON.stringify(r.done.body))
+            ? bodyToText(r.done.body)
             : (r.ok ? '' : 'ERR:' + r.error);
           return b + '|done=' + (r.doneCalled ? 1 : 0) + '|logs=' + ((r.logs || []).join('\n').length);
         };
@@ -685,7 +704,7 @@ async function cmdRun() {
       else if (!res.doneCalled) done = { error: '$done 未被调用（Loon 将等待超时）' };
       else {
         const out = res.done.body;
-        const outStr = typeof out === 'string' ? out : (out ? JSON.stringify(out) : '');
+        const outStr = bodyToText(out) || '';   // v1.7.14: Uint8Array 不能 JSON.stringify
         if (!outStr || (body && outStr === body)) done = { unchanged: true };
         else {
           const fields = {};

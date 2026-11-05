@@ -3,6 +3,43 @@
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ---
+## [1.7.14] - 2026-11-02
+
+### ★ 二进制 body 全链路修复（binary-body-mode 场景此前完全不可测）
+
+三处缺陷叠加，导致所有「改二进制响应」的脚本在 sim 里都表现为「规则命中但未修改」：
+
+1. **`--response-file` 按 utf8 读**
+   `fs.readFileSync(rf, 'utf8')` 把非法字节替换成 U+FFFD，脚本拿到的 body 已损坏。
+   → 改为：能无损 utf8 往返就用字符串（保持旧行为），否则传 Buffer。
+
+2. **`normalizeDone` 用 `instanceof Uint8Array` 判断**
+   脚本在 vm 沙箱里 `new Uint8Array()`，其构造器与宿主不同 → `instanceof` 恒 false
+   → 二进制 body 被当成普通对象展开成 `{"0":0,"1":0,...}`。
+   → 改为鸭子类型 + `Object.prototype.toString` 双重判断。
+
+3. **结果统计用 `JSON.stringify(out)`**
+   Uint8Array 被序列化成 JSON 对象，长度与内容全错（45B 显示成 345B）。
+   → 新增 `bodyToText()`：Uint8Array/Buffer 转 latin1 二进制串。
+
+### 实证
+
+B站 `Teenagers/ModeStatus`（45B gRPC 帧，未压缩）：
+```
+修复前: 原样返回（未修改）
+修复后: ✓ 已修改  长度: 45B → 43B
+```
+字节级校验（三条路径）：
+- 未压缩帧 → `00000000260a1408d98f8d0712097465656e61676572732a005010...`（与真实服务端响应逐字节一致）
+- gzip 帧（flag=1）→ 同一结果
+- policy 已空 → 正确判定「未修改」
+
+### 教训
+
+`instanceof` 在 vm 沙箱边界上不可靠；二进制场景要同时检查「读取」「类型判断」「结果展示」三层，
+任何一层按文本处理都会静默失败。
+
+---
 ## [1.7.13] - 2026-11-01
 
 ### ★ resolveSimPath 补 `scripts/` 子目录查找（多脚本插件全部无法 run）
