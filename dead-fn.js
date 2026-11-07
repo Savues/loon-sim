@@ -20,10 +20,16 @@ if (!file || !fs.existsSync(file)) { console.error('用法: node dead-fn.js <bun
 const asJson = process.argv.includes('--json');
 const code = fs.readFileSync(file, 'utf8');
 
-// 顶格 function 定义 (缩进定义视为嵌套/私有, 不检)
+// 顶格 function 或变量函数定义 (缩进定义视为嵌套/私有, 不检)
 const defs = [];
 code.split('\n').forEach((l, i) => {
-  const m = /^function (\w+)\s*\(/.exec(l);
+  let m = /^function (\w+)\s*\(/.exec(l);
+  if (!m) {
+    m = /^(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[a-zA-Z_$][\w$]*)\s*=>/.exec(l);
+  }
+  if (!m) {
+    m = /^(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s*)?function\s*(?:\w+)?\s*\(/.exec(l);
+  }
   if (m) defs.push({ name: m[1], line: i + 1 });
 });
 

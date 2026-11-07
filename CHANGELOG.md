@@ -3,6 +3,21 @@
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
 ---
+## [1.7.15] - 2026-11-08
+
+### ★ 工具链鲁棒性增强与多副本误报治理
+
+1. **`version-probe.sh` 探针 URL 自包含解析**
+   - 之前完全依赖磁盘存在 `<name>.lpx.probe` 辅助文件，缺失即报错。
+   - 改为优先读取 `.probe`；缺失时自动从 `.lpx` 的 `[Rewrite]` 探针规则与 `[MitM]` hostname 回溯重组 probe URL。
+
+2. **`dead-fn.js` 扩展支持现代 ES6 变量函数与箭头函数**
+   - 增加对 `const/let/var fn = () =>` 与 `const fn = function()` 顶格定义的识别，补齐死代码检测盲区。
+
+3. **`audit.py` 优化多副本隔离判定**
+   - 区分「同插件内分叉」与「跨顶层插件通用模块」；分属不同插件目录的同名独立脚本（如 `CtClient-AdBlock/bundle.js` vs `Alibaba-AdBlock/bundle.js`）不再误报为伞复发事故。
+
+---
 ## [1.7.14] - 2026-11-02
 
 ### ★ 二进制 body 全链路修复（binary-body-mode 场景此前完全不可测）

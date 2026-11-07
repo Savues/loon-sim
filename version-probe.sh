@@ -26,10 +26,23 @@ fi
 VER=$(grep -m1 '^#!version=' "$LPX" | cut -d= -f2)
 [ -n "$VER" ] || VER="(无#!version)"
 
-# 2. 探针域名: 从插件名派生 (每个插件在 [Rewrite] 里埋一条探针规则)
+# 2. 探针 URL 提取 (优先读 .probe 文件; 若无则直接从 LPX 的 Rewrite 探针行解析)
 NAME=$(basename "$LPX" .lpx | tr '[:upper:]' '[:lower:]')
-PROBE_URL="$(cat "$LPX.probe" 2>/dev/null | tr -d '
-')"
+PROBE_URL="$(cat "$LPX.probe" 2>/dev/null | tr -d '\n\r')"
+
+if [ -z "$PROBE_URL" ]; then
+  # 从 LPX 的 Rewrite 段提取 probe 规则并重组 URL
+  PROBE_LINE=$(grep -E 'loon-sim\.probe' "$LPX" | grep -E 'then reject\(200' | head -1 || true)
+  if [ -n "$PROBE_LINE" ]; then
+    # 提取 probe.xxx 并从 [MitM] hostname 拿主域名
+    PROBE_NAME=$(echo "$PROBE_LINE" | sed -n 's/.*loon-sim\.probe[.\/]\([a-zA-Z0-9_-]*\).*/\1/p')
+    MITM_HOST=$(grep -E '^hostname\s*=' "$LPX" | head -1 | cut -d= -f2 | cut -d, -f1 | tr -d ' ')
+    if [ -n "$PROBE_NAME" ] && [ -n "$MITM_HOST" ]; then
+      PROBE_URL="https://${MITM_HOST}/gw/loon-sim.probe.${PROBE_NAME}"
+    fi
+  fi
+fi
+
 [ -n "$PROBE_URL" ] || PROBE_URL="https://probe.${NAME}.loon-sim.local/version"
 
 # 3. 探针: 该域名若已在插件 [Rewrite] 中埋了 reject(200, "$VER") → 返回版本号
