@@ -92,19 +92,44 @@ if dup_total == 0: good('无同名多副本')
 note()
 
 # ── ③ 缓存戳漂移 ──
+# git log 单次调用在 iSH 上约 0.04~0.28s（取决于对象库页缓存），97 次逐个调用实测
+# 7.6s（热缓存）~27.5s（冷缓存）。改为一次 git log --name-only 全仓扫描 → ~1s。
 note('── ③ 缓存戳漂移检测')
-def mtime_ns(p):
-    r = subprocess.run(['git', 'log', '-1', '--format=%ct', '--', str(p.relative_to(ROOT))],
-                       cwd=ROOT, capture_output=True, text=True)
-    return int(r.stdout.strip() or 0)
-stamp_bad = 0
+STAMP_PAT = re.compile(r'script-path=(https://raw\.githubusercontent\.com/[^/]+/[^/]+/main/([^,?"\s]+))')
+
+# 先收集全部待查路径（lpx 自身 + 它引用的脚本）
+need = set()
+plan = []          # [(lpx, [被引用的脚本相对路径…])]
 for lpx in lpxs:
-    l_t = mtime_ns(lpx)
-    for m in re.finditer(r'script-path=(https://raw\.githubusercontent\.com/[^/]+/[^/]+/main/([^,?"\s]+))', lpx.read_text(encoding='utf-8', errors='ignore')):
-        rel = ROOT / m.group(2)
-        if not rel.is_file(): continue
-        if mtime_ns(rel) > l_t:
-            bad(f'{m.group(2)} 比 {lpx.name} 新 — 改了脚本但 ?v= 未递增 (v723 回退事故模式)'); stamp_bad += 1
+    rel_lpx = str(lpx.relative_to(ROOT))
+    need.add(rel_lpx)
+    refs = []
+    for m in STAMP_PAT.finditer(lpx.read_text(encoding='utf-8', errors='ignore')):
+        if (ROOT / m.group(2)).is_file():
+            refs.append(m.group(2)); need.add(m.group(2))
+    plan.append((lpx, refs))
+
+def last_commit_times(paths):
+    """一次 git log 拿到每个路径的最后提交时间。git log 是新→旧，首次出现即最后一次。"""
+    if not paths:
+        return {}
+    r = subprocess.run(['git', 'log', '--format=@%ct', '--name-only', '--'] + sorted(paths),
+                       cwd=ROOT, capture_output=True, text=True)
+    out, cur = {}, 0
+    for line in r.stdout.splitlines():
+        if line.startswith('@'):
+            cur = int(line[1:])
+        elif line.strip() and line not in out:
+            out[line] = cur
+    return out
+
+ct = last_commit_times(need)
+stamp_bad = 0
+for lpx, refs in plan:
+    l_t = ct.get(str(lpx.relative_to(ROOT)), 0)
+    for rp in refs:
+        if ct.get(rp, 0) > l_t:
+            bad(f'{rp} 比 {lpx.name} 新 — 改了脚本但 ?v= 未递增 (v723 回退事故模式)'); stamp_bad += 1
 if stamp_bad == 0: good('无缓存戳漂移')
 note()
 
