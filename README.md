@@ -66,6 +66,9 @@ node selftest.js
 
 # 13. 全套 CI（自测 → 历史回溯 → 全量插件 check → parity）
 sh ci.sh
+
+# 14. 发布前物流审计（4 段：资源 URL / 多副本 / 缓存戳 / Git 身份 / README 元数据）
+python3 audit.py ../../plugins/*/*.lpx
 ```
 
 ### ★ 终端实测前必跑 — 版本探针
