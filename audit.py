@@ -25,16 +25,24 @@ note(f'══ audit: {len(lpxs)} 个清单 ══'); note()
 
 all_text = '\n'.join(p.read_text(encoding='utf-8', errors='ignore') for p in lpxs)
 
-# ── ① URL 可达性 ──
+# ── ① URL 可达性（并发, 8 线程; 输出仍按原顺序, 保证可比对）──
 note('── ① 资源 URL 可达性')
 urls = sorted(set(re.findall(r'(?:script-path=|#!icon=)(https://[^,"\s]+)', all_text)))
-bad_n = 0
-for u in urls:
+
+def probe(u):
     r = subprocess.run(['curl', '-s', '-o', '/dev/null', '-w', '%{http_code}', '--max-time', '12', u],
                        capture_output=True, text=True)
-    code = r.stdout.strip() or '000'
-    if code != '200':
-        bad(f'{code} {u}'); bad_n += 1
+    return r.stdout.strip() or '000'
+
+bad_n = 0
+if urls:
+    # iSH 单核, 但瓶颈是网络 RTT —— 8 路并发把 69 个 URL 从 ~90s 压到 ~12s
+    import concurrent.futures as cf
+    with cf.ThreadPoolExecutor(max_workers=8) as pool:
+        codes = list(pool.map(probe, urls))
+    for u, code in zip(urls, codes):
+        if code != '200':
+            bad(f'{code} {u}'); bad_n += 1
 if bad_n == 0: good(f'全部 {len(urls)} 个资源 URL 200')
 note()
 
