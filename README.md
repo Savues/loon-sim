@@ -64,10 +64,15 @@ node cli.js run <plugin.lpx> --url "..." --mock m.json --out /tmp/out.json
 # 12. 内核自测（90 项，含 5 项异步用例）
 node selftest.js
 
-# 13. 全套 CI（自测 → 历史回溯 → 全量插件 check → parity）
+# 13. 全套 CI（自测 → 历史回溯 → 全量插件 check → parity → 死代码 → 单测 → 双仓）
 sh ci.sh
 
-# 14. 发布前物流审计（4 段：资源 URL / 多副本 / 缓存戳 / Git 身份 / README 元数据）
+# 14. 单插件定向验证（日常改一个插件时跑这个，不要跑全套 CI）
+sh verify.sh ../../plugins/PinDuoDuo
+#   = check + dead-fn(该插件) + parity + 该插件 test.mjs + audit
+#   ~3-6s；不覆盖 cli.js run（那需要真实 URL 与响应体，仍须手动）
+
+# 15. 发布前物流审计（5 段：资源 URL / 多副本 / 缓存戳 / Git 身份 / README 元数据）
 python3 audit.py ../../plugins/*/*.lpx
 ```
 
